@@ -214,6 +214,11 @@ export type EquipmentRow = {
 
 const g = globalThis as unknown as { __crmDbs?: Map<string, DatabaseSync> };
 
+/** node:sqlite rows are not plain objects, so React cannot pass them to client components. */
+function plainRows<T extends object>(rows: T[]): T[] {
+  return rows.map((row) => ({ ...row }));
+}
+
 export function openDatabase(file: string): DatabaseSync {
   const db = new DatabaseSync(file);
   db.exec("PRAGMA foreign_keys = ON;");
@@ -549,7 +554,7 @@ export type LeadRecord = {
 };
 
 export function listLeads(db = getDb()): LeadRecord[] {
-  return db.prepare("SELECT * FROM leads").all() as LeadRecord[];
+  return plainRows(db.prepare("SELECT * FROM leads").all() as LeadRecord[]);
 }
 
 export function updateLead(importKey: string, patch: Record<string, string | number | null>, db = getDb()) {
@@ -626,7 +631,15 @@ function leadFacts(db: DatabaseSync): LeadFact[] {
 export function kpiData(asOf = todayIso(), db = getDb()) {
   const activities = db.prepare("SELECT assignee, deadline, state FROM activities").all() as ActivityFact[];
   const bundle = computeKpis(leadFacts(db), activities, asOf);
-  const targets = db.prepare("SELECT id, salesperson, metric, period, target_value FROM kpi_targets ORDER BY period, salesperson").all();
+  const targets = plainRows(
+    db.prepare("SELECT id, salesperson, metric, period, target_value FROM kpi_targets ORDER BY period, salesperson").all() as {
+      id: number;
+      salesperson: string;
+      metric: string;
+      period: string;
+      target_value: number;
+    }[],
+  );
   return { ...bundle, targets, metricsReady: true };
 }
 
@@ -642,7 +655,7 @@ export function deleteTarget(id: number, db = getDb()) {
 }
 
 export function listEquipment(db = getDb()): EquipmentRow[] {
-  return db.prepare("SELECT * FROM equipment ORDER BY site_id, site_seq").all() as EquipmentRow[];
+  return plainRows(db.prepare("SELECT * FROM equipment ORDER BY site_id, site_seq").all() as EquipmentRow[]);
 }
 
 export function getEquipment(serial: string, db = getDb()): EquipmentRow | undefined {
