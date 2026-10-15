@@ -1,0 +1,27 @@
+@import "tailwindcss";
+
+:root {
+  --bg: #eef1f6;
+  --ink: #172033;
+  --muted: #667085;
+  --navy: #10182f;
+  --line: #e4e7ef;
+  --card: #ffffff;
+  --blue: #3557f5;
+  --red: #e11d48;
+  --amber: #d97706;
+}
+
+@theme inline {
+  --font-sans: var(--font-dm);
+  --font-serif: var(--font-fraunces);
+  --color-navy: var(--navy);
+  --color-blue: var(--blue);
+}
+
+html, body { background: var(--bg); color: var(--ink); }
+body { font-family: var(--font-dm), "Segoe UI", sans-serif; }
+
+button, input, select, textarea { font: inherit; }
+button { cursor: pointer; }
+::selection { background: #dbe4ff; }
