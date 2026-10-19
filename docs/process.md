@@ -143,6 +143,8 @@ Seeded rows without `odoo_id` link when exactly one local row matches the normal
 
 `dryRun: true` reports `wouldInsert`, `wouldUpdate`, `wouldLink`, and `wouldArchive` and does not write leads, activities, the snapshot, or the sync log. On a dry run, `wouldArchive` treats that body as the whole snapshot. Live batches that include `snapshotId` leave archive at 0 until commit. Commit accepts `{ "snapshotId", "dryRun": true }` to report `wouldArchive` after the batches are stored, without archiving.
 
+Ingest and commit read the existing leads in one query, match `odoo_id`, `import_key`, and name + customer + day in memory, and write with `batch()` in chunks of 80 statements. A full export of about 700 opportunities stays inside one Worker invocation.
+
 Stage names map to the canvas stage list. Matching ignores case, accents, and spaces. An unknown stage is stored and shown with the label Odoo sent.
 
 ```json

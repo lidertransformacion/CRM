@@ -1,6 +1,6 @@
 import { normalizeWonStatus } from "@/lib/kpi/compute";
 import { canonicalStage } from "@/lib/odoo/stages";
-import type { SqlDb } from "@/lib/sql/types";
+import { SQL_BATCH_LIMIT, type SqlBatch, type SqlDb } from "@/lib/sql/types";
 
 export type IngestActivity = {
   id?: string | number | null;
@@ -105,6 +105,24 @@ type StoredLead = {
 
 type LeadOutcome = { action: "inserted" | "updated" | "linked"; importKey: string };
 
+type LeadIndex = {
+  rows: StoredLead[];
+  byOdoo: Map<string, StoredLead>;
+  byKey: Map<string, StoredLead>;
+  unlinked: Map<string, StoredLead[]>;
+};
+
+const LEAD_SQL =
+  "SELECT import_key, name, stage, odoo_stage, team, salesperson, customer, expected_revenue, odoo_expected_revenue, probability, odoo_probability, won_status, active, sync_state, odoo_id, created_at FROM leads";
+
+const UPDATE_LEAD = `UPDATE leads SET name=?, type=?, stage=?, team=?, salesperson=?, customer=?, expected_revenue=?, probability=?, created_at=COALESCE(?, created_at), expected_close=?, closed_at=?, won_status=?, active=?, loss_reason=?, tags=?, odoo_id=?, odoo_stage=?, odoo_expected_revenue=?, odoo_probability=?, missing_from_odoo=0, sync_state=CASE WHEN sync_state IN ('pending_local','pending_create') THEN sync_state ELSE 'synced' END WHERE import_key=?`;
+
+const INSERT_LEAD = `INSERT INTO leads (import_key, name, type, stage, team, salesperson, customer, expected_revenue, probability, created_at, expected_close, closed_at, won_status, active, loss_reason, tags, odoo_id, edited_locally, sync_state, odoo_stage, odoo_expected_revenue, odoo_probability, missing_from_odoo)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'synced', ?, ?, ?, 0)`;
+
+const INSERT_ACTIVITY = `INSERT INTO activities (odoo_lead_id, odoo_activity_id, document_name, summary, activity_type, deadline, state, created_at, note, assignee, lead_import_key)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+
 function text(value: string | null | undefined): string {
   return (value ?? "").trim();
 }
@@ -176,8 +194,8 @@ export async function ingestSnapshot(db: SqlDb, body: IngestRequest): Promise<In
   const result = emptyResult(mode, snapshotId, dryRun);
   const seen = new Set<string>();
   const kept = new Set<string>();
-  const now = new Date().toISOString();
-  const unlinked = await loadUnlinked(db);
+  const statements: SqlBatch[] = [];
+  const index = indexLeads(await db.all<StoredLead>(LEAD_SQL));
 
   for (const raw of leads) {
     const odooId = raw?.id == null ? "" : String(raw.id).trim();
@@ -186,7 +204,7 @@ export async function ingestSnapshot(db: SqlDb, body: IngestRequest): Promise<In
       continue;
     }
     try {
-      const outcome = await upsertLead(db, odooId, raw, result, unlinked, dryRun);
+      const outcome = planLead(index, odooId, raw, result, statements, dryRun);
       seen.add(odooId);
       kept.add(outcome.importKey);
       if (outcome.action === "inserted") result.wouldInsert += 1;
@@ -196,32 +214,31 @@ export async function ingestSnapshot(db: SqlDb, body: IngestRequest): Promise<In
         if (outcome.action === "inserted") result.inserted += 1;
         else if (outcome.action === "linked") result.linked += 1;
         else result.updated += 1;
-        if (snapshotId) {
-          await db.run("INSERT OR IGNORE INTO odoo_snapshot_seen (snapshot_id, odoo_id) VALUES (?, ?)", [snapshotId, odooId]);
-        }
+        if (snapshotId) statements.push({ sql: "INSERT OR IGNORE INTO odoo_snapshot_seen (snapshot_id, odoo_id) VALUES (?, ?)", params: [snapshotId, odooId] });
       }
       if (Array.isArray(raw.activities)) {
-        const count = dryRun ? raw.activities.length : await replaceActivities(db, odooId, raw.activities);
-        result.activities += count;
+        result.activities += raw.activities.length;
+        if (!dryRun) appendActivities(statements, odooId, outcome.importKey, raw.activities);
       }
     } catch (error) {
       result.errors.push({ id: odooId, message: error instanceof Error ? error.message : "No se pudo guardar." });
     }
   }
 
-  if (mode === "full" && (dryRun || !snapshotId)) {
-    await archiveMissing(db, seen, kept, result, dryRun);
-  }
-
+  if (mode === "full" && (dryRun || !snapshotId)) planArchive(index.rows, seen, kept, result, statements, dryRun);
   if (!dryRun) {
-    await db.run(
-      `INSERT INTO odoo_sync_log (at, mode, inserted_count, updated_count, archived_count, error_text, summary_json) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      [body.capturedAt || now, mode, result.inserted, result.updated + result.linked, result.archived, result.errors.map((error) => error.message).join("\n"), JSON.stringify({ snapshotId: result.snapshotId, linked: result.linked, changes: result.changes.slice(0, 200) })],
+    const now = new Date().toISOString();
+    statements.push(
+      {
+        sql: `INSERT INTO odoo_sync_log (at, mode, inserted_count, updated_count, archived_count, error_text, summary_json) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        params: [body.capturedAt || now, mode, result.inserted, result.updated + result.linked, result.archived, result.errors.map((error) => error.message).join("\n"), JSON.stringify({ snapshotId: result.snapshotId, linked: result.linked, changes: result.changes.slice(0, 200) })],
+      },
+      {
+        sql: `INSERT INTO app_settings (key, value) VALUES ('odoo_last_ingest', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+        params: [JSON.stringify({ at: body.capturedAt || now, mode, snapshotId: result.snapshotId, inserted: result.inserted, updated: result.updated, linked: result.linked, archived: result.archived, errors: result.errors.length })],
+      },
     );
-    await db.run(
-      `INSERT INTO app_settings (key, value) VALUES ('odoo_last_ingest', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
-      [JSON.stringify({ at: body.capturedAt || now, mode, snapshotId: result.snapshotId, inserted: result.inserted, updated: result.updated, linked: result.linked, archived: result.archived, errors: result.errors.length })],
-    );
+    await writeChunks(db, statements);
   }
   return result;
 }
@@ -230,50 +247,60 @@ export async function commitSnapshot(db: SqlDb, body: CommitRequest): Promise<Co
   const snapshotId = text(body.snapshotId);
   if (!snapshotId) throw new Error("Falta snapshotId.");
   const dryRun = body.dryRun === true;
-  const seenRows = await db.all<{ odoo_id: string }>("SELECT odoo_id FROM odoo_snapshot_seen WHERE snapshot_id = ?", [snapshotId]);
+  const [seenRows, leadRows] = (await db.batch([
+    { sql: "SELECT odoo_id FROM odoo_snapshot_seen WHERE snapshot_id = ?", params: [snapshotId] },
+    { sql: "SELECT import_key, odoo_id, sync_state FROM leads" },
+  ])) as [{ odoo_id: string }[], { import_key: string; odoo_id: string | null; sync_state: string }[]];
   if (!seenRows.length) throw new Error("Ese snapshot no tiene leads.");
   const seen = new Set(seenRows.map((row) => row.odoo_id));
   const result = emptyResult("full", snapshotId, dryRun);
-  await archiveMissing(db, seen, new Set(), result, dryRun);
+  const statements: SqlBatch[] = [];
+  planArchive(leadRows, seen, new Set(), result, statements, dryRun);
   if (!dryRun) {
     const now = new Date().toISOString();
-    await db.run(
-      `INSERT INTO odoo_sync_log (at, mode, inserted_count, updated_count, archived_count, error_text, summary_json) VALUES (?, 'commit', 0, 0, ?, '', ?)`,
-      [now, result.archived, JSON.stringify({ snapshotId, seen: seen.size })],
+    statements.push(
+      {
+        sql: `INSERT INTO odoo_sync_log (at, mode, inserted_count, updated_count, archived_count, error_text, summary_json) VALUES (?, 'commit', 0, 0, ?, '', ?)`,
+        params: [now, result.archived, JSON.stringify({ snapshotId, seen: seen.size })],
+      },
+      { sql: "DELETE FROM odoo_snapshot_seen WHERE snapshot_id = ?", params: [snapshotId] },
     );
-    await db.run("DELETE FROM odoo_snapshot_seen WHERE snapshot_id = ?", [snapshotId]);
+    await writeChunks(db, statements);
   }
   return { snapshotId, dryRun, seen: seen.size, archived: result.archived, wouldArchive: result.wouldArchive };
 }
 
-async function loadUnlinked(db: SqlDb): Promise<Map<string, StoredLead[]>> {
-  const rows = await db.all<StoredLead>(
-    "SELECT import_key, name, stage, odoo_stage, team, salesperson, customer, expected_revenue, odoo_expected_revenue, probability, odoo_probability, won_status, active, sync_state, odoo_id, created_at FROM leads WHERE odoo_id IS NULL OR odoo_id = ''",
-  );
-  const index = new Map<string, StoredLead[]>();
+function indexLeads(rows: StoredLead[]): LeadIndex {
+  const byOdoo = new Map<string, StoredLead>();
+  const byKey = new Map<string, StoredLead>();
+  const unlinked = new Map<string, StoredLead[]>();
   for (const row of rows) {
+    byKey.set(row.import_key, row);
+    const odooId = text(row.odoo_id);
+    if (odooId) {
+      byOdoo.set(odooId, row);
+      continue;
+    }
     const key = identityKey(row.name, row.customer ?? "", row.created_at);
     if (!key) continue;
-    const list = index.get(key) ?? [];
+    const list = unlinked.get(key) ?? [];
     list.push(row);
-    index.set(key, list);
+    unlinked.set(key, list);
   }
-  return index;
+  return { rows, byOdoo, byKey, unlinked };
 }
 
-async function upsertLead(db: SqlDb, odooId: string, raw: IngestLead, result: IngestResult, unlinked: Map<string, StoredLead[]>, dryRun: boolean): Promise<LeadOutcome> {
+function planLead(index: LeadIndex, odooId: string, raw: IngestLead, result: IngestResult, statements: SqlBatch[], dryRun: boolean): LeadOutcome {
   const key = leadKey(odooId);
-  let existing =
-    (await db.get<StoredLead>("SELECT import_key, name, stage, odoo_stage, team, salesperson, customer, expected_revenue, odoo_expected_revenue, probability, odoo_probability, won_status, active, sync_state, odoo_id, created_at FROM leads WHERE odoo_id = ?", [odooId])) ??
-    (await db.get<StoredLead>("SELECT import_key, name, stage, odoo_stage, team, salesperson, customer, expected_revenue, odoo_expected_revenue, probability, odoo_probability, won_status, active, sync_state, odoo_id, created_at FROM leads WHERE import_key = ?", [key]));
+  let existing = index.byOdoo.get(odooId) ?? index.byKey.get(key);
   let action: LeadOutcome["action"] = existing ? "updated" : "inserted";
   if (!existing) {
     const matchKey = identityKey(text(raw.name), text(raw.customer ?? raw.partner), raw.createdAt ?? raw.created_at);
-    const candidates = matchKey ? unlinked.get(matchKey) ?? [] : [];
+    const candidates = matchKey ? index.unlinked.get(matchKey) ?? [] : [];
     if (candidates.length === 1) {
       existing = candidates[0];
       action = "linked";
-      unlinked.delete(matchKey);
+      index.unlinked.delete(matchKey);
     } else if (candidates.length > 1) {
       result.errors.push({ id: odooId, message: "Hay varias oportunidades locales con el mismo nombre, cliente y fecha. No se enlazó." });
     }
@@ -293,6 +320,7 @@ async function upsertLead(db: SqlDb, odooId: string, raw: IngestLead, result: In
   const displayRevenue = pending && existing ? existing.expected_revenue : revenue;
   const displayProbability = pending && existing ? existing.probability : probability;
   const createdAt = raw.createdAt ?? raw.created_at ?? null;
+  const leadType = text(raw.type) || "Oportunidad";
 
   if (existing) {
     pushChange(result, odooId, "stage", existing.odoo_stage || existing.stage, stage);
@@ -301,71 +329,92 @@ async function upsertLead(db: SqlDb, odooId: string, raw: IngestLead, result: In
     pushChange(result, odooId, "expected_revenue", String(existing.odoo_expected_revenue ?? existing.expected_revenue ?? ""), String(revenue ?? ""));
     if (action === "linked") pushChange(result, odooId, "odoo_id", "", odooId);
     if (!dryRun) {
-      await db.run(
-        `UPDATE leads SET name=?, type=?, stage=?, team=?, salesperson=?, customer=?, expected_revenue=?, probability=?, created_at=COALESCE(?, created_at), expected_close=?, closed_at=?, won_status=?, active=?, loss_reason=?, tags=?, odoo_id=?, odoo_stage=?, odoo_expected_revenue=?, odoo_probability=?, missing_from_odoo=0, sync_state=CASE WHEN sync_state IN ('pending_local','pending_create') THEN sync_state ELSE 'synced' END WHERE import_key=?`,
-        [
-          name,
-          text(raw.type) || "Oportunidad",
-          displayStage,
-          team,
-          salesperson,
-          customer,
-          displayRevenue,
-          displayProbability,
-          createdAt,
-          raw.expectedClose ?? null,
-          raw.closedAt ?? null,
-          won,
-          active ? 1 : 0,
-          text(raw.lossReason),
-          text(raw.tags),
-          odooId,
-          stage,
-          revenue,
-          probability,
-          existing.import_key,
-        ],
-      );
+      statements.push({
+        sql: UPDATE_LEAD,
+        params: [name, leadType, displayStage, team, salesperson, customer, displayRevenue, displayProbability, createdAt, raw.expectedClose ?? null, raw.closedAt ?? null, won, active ? 1 : 0, text(raw.lossReason), text(raw.tags), odooId, stage, revenue, probability, existing.import_key],
+      });
     }
+    remember(existing, { name, displayStage, stage, team, salesperson, customer, displayRevenue, displayProbability, revenue, probability, won, active, createdAt, odooId, pending });
+    index.byOdoo.set(odooId, existing);
     return { action, importKey: existing.import_key };
   }
 
   if (!dryRun) {
-    await db.run(
-      `INSERT INTO leads (import_key, name, type, stage, team, salesperson, customer, expected_revenue, probability, created_at, expected_close, closed_at, won_status, active, loss_reason, tags, odoo_id, edited_locally, sync_state, odoo_stage, odoo_expected_revenue, odoo_probability, missing_from_odoo)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'synced', ?, ?, ?, 0)`,
-      [
-        key,
-        name,
-        text(raw.type) || "Oportunidad",
-        stage,
-        team,
-        salesperson,
-        customer,
-        revenue,
-        probability,
-        createdAt,
-        raw.expectedClose ?? null,
-        raw.closedAt ?? null,
-        won,
-        active ? 1 : 0,
-        text(raw.lossReason),
-        text(raw.tags),
-        odooId,
-        stage,
-        revenue,
-        probability,
-      ],
-    );
+    statements.push({
+      sql: INSERT_LEAD,
+      params: [key, name, leadType, stage, team, salesperson, customer, revenue, probability, createdAt, raw.expectedClose ?? null, raw.closedAt ?? null, won, active ? 1 : 0, text(raw.lossReason), text(raw.tags), odooId, stage, revenue, probability],
+    });
   }
+  const created: StoredLead = {
+    import_key: key,
+    name,
+    stage,
+    odoo_stage: stage,
+    team,
+    salesperson,
+    customer,
+    expected_revenue: revenue,
+    odoo_expected_revenue: revenue,
+    probability,
+    odoo_probability: probability,
+    won_status: won,
+    active: active ? 1 : 0,
+    sync_state: "synced",
+    odoo_id: odooId,
+    created_at: createdAt,
+  };
+  index.rows.push(created);
+  index.byKey.set(key, created);
+  index.byOdoo.set(odooId, created);
   result.changes.push({ odooId, field: "created", from: "", to: name });
   return { action: "inserted", importKey: key };
 }
 
-async function archiveMissing(db: SqlDb, seen: Set<string>, kept: Set<string>, result: IngestResult, dryRun: boolean) {
-  const rows = await db.all<{ import_key: string; odoo_id: string | null; sync_state: string }>(
-    "SELECT import_key, odoo_id, sync_state FROM leads",
-  );
+function remember(
+  row: StoredLead,
+  next: {
+    name: string;
+    displayStage: string;
+    stage: string;
+    team: string;
+    salesperson: string;
+    customer: string;
+    displayRevenue: number | null;
+    displayProbability: number | null;
+    revenue: number | null;
+    probability: number | null;
+    won: string;
+    active: boolean;
+    createdAt: string | null;
+    odooId: string;
+    pending: boolean;
+  },
+) {
+  row.name = next.name;
+  row.stage = next.displayStage;
+  row.odoo_stage = next.stage;
+  row.team = next.team;
+  row.salesperson = next.salesperson;
+  row.customer = next.customer;
+  row.expected_revenue = next.displayRevenue;
+  row.odoo_expected_revenue = next.revenue;
+  row.probability = next.displayProbability;
+  row.odoo_probability = next.probability;
+  row.won_status = next.won;
+  row.active = next.active ? 1 : 0;
+  if (next.createdAt) row.created_at = next.createdAt;
+  row.odoo_id = next.odooId;
+  if (!next.pending) row.sync_state = "synced";
+}
+
+function planArchive(
+  rows: { import_key: string; odoo_id: string | null; sync_state: string }[],
+  seen: Set<string>,
+  kept: Set<string>,
+  result: IngestResult,
+  statements: SqlBatch[],
+  dryRun: boolean,
+) {
   for (const row of rows) {
     if (row.sync_state === "pending_create") continue;
     if (kept.has(row.import_key)) continue;
@@ -373,34 +422,27 @@ async function archiveMissing(db: SqlDb, seen: Set<string>, kept: Set<string>, r
     if (odooId && seen.has(odooId)) continue;
     result.wouldArchive += 1;
     if (dryRun) continue;
-    await db.run(
-      "UPDATE leads SET active = 0, missing_from_odoo = 1, won_status = CASE WHEN won_status = 'Ganado' THEN won_status ELSE 'Perdido' END WHERE import_key = ?",
-      [row.import_key],
+    statements.push({
+      sql: "UPDATE leads SET active = 0, missing_from_odoo = 1, won_status = CASE WHEN won_status = 'Ganado' THEN won_status ELSE 'Perdido' END WHERE import_key = ?",
+      params: [row.import_key],
+    });
+    statements.push(
+      odooId
+        ? { sql: "DELETE FROM activities WHERE odoo_lead_id = ? OR lead_import_key = ?", params: [odooId, row.import_key] }
+        : { sql: "DELETE FROM activities WHERE lead_import_key = ?", params: [row.import_key] },
     );
-    if (odooId) await db.run("DELETE FROM activities WHERE odoo_lead_id = ? OR lead_import_key = ?", [odooId, row.import_key]);
-    else await db.run("DELETE FROM activities WHERE lead_import_key = ?", [row.import_key]);
     result.archived += 1;
     result.changes.push({ odooId: odooId || row.import_key, field: "missing_from_odoo", from: "0", to: "1" });
   }
 }
 
-function pushChange(result: IngestResult, odooId: string, field: string, from: string, to: string) {
-  if (from === to) return;
-  if (result.changes.length >= 200) return;
-  result.changes.push({ odooId, field, from, to });
-}
-
-async function replaceActivities(db: SqlDb, odooId: string, activities: IngestActivity[]): Promise<number> {
-  const lead = await db.get<{ import_key: string }>("SELECT import_key FROM leads WHERE odoo_id = ?", [odooId]);
-  await db.run("DELETE FROM activities WHERE odoo_lead_id = ?", [odooId]);
-  let count = 0;
+function appendActivities(statements: SqlBatch[], odooId: string, importKey: string, activities: IngestActivity[]) {
+  statements.push({ sql: "DELETE FROM activities WHERE odoo_lead_id = ?", params: [odooId] });
   for (const activity of activities) {
-    const resId = String(activity.resId ?? activity.res_id ?? odooId);
-    await db.run(
-      `INSERT INTO activities (odoo_lead_id, odoo_activity_id, document_name, summary, activity_type, deadline, state, created_at, note, assignee, lead_import_key)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        resId,
+    statements.push({
+      sql: INSERT_ACTIVITY,
+      params: [
+        String(activity.resId ?? activity.res_id ?? odooId),
         activity.id == null ? null : String(activity.id),
         text(activity.documentName ?? activity.document_name),
         text(activity.summary),
@@ -410,12 +452,22 @@ async function replaceActivities(db: SqlDb, odooId: string, activities: IngestAc
         activity.createdAt ?? null,
         text(activity.note),
         text(activity.assignee ?? activity.user),
-        lead?.import_key ?? null,
+        importKey,
       ],
-    );
-    count += 1;
+    });
   }
-  return count;
+}
+
+async function writeChunks(db: SqlDb, statements: SqlBatch[]) {
+  for (let index = 0; index < statements.length; index += SQL_BATCH_LIMIT) {
+    await db.batch(statements.slice(index, index + SQL_BATCH_LIMIT));
+  }
+}
+
+function pushChange(result: IngestResult, odooId: string, field: string, from: string, to: string) {
+  if (from === to) return;
+  if (result.changes.length >= 200) return;
+  result.changes.push({ odooId, field, from, to });
 }
 
 export async function syncStatus(db: SqlDb) {

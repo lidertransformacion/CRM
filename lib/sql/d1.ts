@@ -1,5 +1,5 @@
 import { splitSql } from "@/lib/schema";
-import type { SqlDb } from "@/lib/sql/types";
+import { SQL_BATCH_LIMIT, type SqlDb } from "@/lib/sql/types";
 
 type Stmt = { sql: string; params: unknown[] };
 
@@ -10,14 +10,12 @@ type Stmt = { sql: string; params: unknown[] };
 export function wrapD1(d1: D1Database): SqlDb {
   let buffer: Stmt[] | null = null;
 
-  const BATCH_LIMIT = 80;
-
   async function flush() {
     if (!buffer?.length) return;
     const pending = buffer;
     buffer = buffer ? [] : null;
-    for (let index = 0; index < pending.length; index += BATCH_LIMIT) {
-      const slice = pending.slice(index, index + BATCH_LIMIT);
+    for (let index = 0; index < pending.length; index += SQL_BATCH_LIMIT) {
+      const slice = pending.slice(index, index + SQL_BATCH_LIMIT);
       await d1.batch(slice.map((stmt) => d1.prepare(stmt.sql).bind(...stmt.params)));
     }
   }
@@ -66,8 +64,13 @@ export function wrapD1(d1: D1Database): SqlDb {
     async batch(statements: { sql: string; params?: unknown[] }[]) {
       if (buffer?.length) await flush();
       if (!statements.length) return [];
-      const results = await d1.batch(statements.map((stmt) => d1.prepare(stmt.sql).bind(...(stmt.params ?? []))));
-      return results.map((result) => result.results ?? []);
+      const collected: unknown[][] = [];
+      for (let index = 0; index < statements.length; index += SQL_BATCH_LIMIT) {
+        const slice = statements.slice(index, index + SQL_BATCH_LIMIT);
+        const results = await d1.batch(slice.map((stmt) => d1.prepare(stmt.sql).bind(...(stmt.params ?? []))));
+        for (const result of results) collected.push(result.results ?? []);
+      }
+      return collected;
     },
   };
 }

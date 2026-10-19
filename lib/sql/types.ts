@@ -10,6 +10,13 @@ export type SqlBatch = {
   params?: SqlParams;
 };
 
+/**
+ * Statements per D1 `batch()` call. Each call is one API request, and a Worker
+ * invocation fails around a thousand of those ("Too many API requests by single
+ * Worker invocation").
+ */
+export const SQL_BATCH_LIMIT = 80;
+
 /** Async SQL used by both node:sqlite (tests, local Next) and Cloudflare D1. */
 export type SqlDb = {
   readonly kind: "sql";

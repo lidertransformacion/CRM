@@ -15,6 +15,7 @@ import { acknowledgeOutbound, queueOutbound } from "@/lib/odoo/outbound";
 import { googleAccessToken, signServiceAccountJwt } from "@/lib/sheets/live";
 import { applySnapshot, pullFromSheet, rememberPush } from "@/lib/sheets/sync";
 import { wrapDatabaseSync } from "@/lib/sql/node";
+import { SQL_BATCH_LIMIT, type SqlDb } from "@/lib/sql/types";
 import type { PushPlan, SheetSnapshot } from "@/lib/sheets/types";
 
 const created: string[] = [];
@@ -373,4 +374,101 @@ describe("odoo browser agent", () => {
     await expect(commitSnapshot(db, { snapshotId: "odoo-2026-10-19" })).rejects.toThrow(/no tiene leads/);
     await expect(commitSnapshot(db, {})).rejects.toThrow(/Falta snapshotId/);
   });
+
+  it("ingests and commits 1000 leads with a bounded number of D1 calls", async () => {
+    const { db } = await tempSql();
+    const seed = Array.from({ length: 1000 }, (_, i) => ({
+      sql: "INSERT INTO leads (import_key, name, stage, customer, created_at, active, won_status, salesperson, team) VALUES (?, ?, 'LEAD', ?, '2024-06-01', 1, 'Pendiente', '', '')",
+      params: [`excel:${i}`, `Oportunidad ${i}`, `Cliente ${i}`],
+    }));
+    seed.push({
+      sql: "INSERT INTO leads (import_key, name, stage, active, sync_state, won_status) VALUES ('local:nuevo', 'Borrador', 'LEAD', 1, 'pending_create', 'Pendiente')",
+      params: [],
+    });
+    await db.batch(seed);
+    const leads = Array.from({ length: 1000 }, (_, i) => ({
+      id: i + 1,
+      name: `oportunidad  ${i}`,
+      customer: `CLIENTE ${i}`,
+      createdAt: "2024-06-01T08:00:00",
+      stage: "negociacion",
+      active: true,
+      ...(i % 10 === 0 ? { activities: [{ summary: "Llamar", activityType: "Llamada" }] } : {}),
+    }));
+
+    const preview = counting(db);
+    const dry = await ingestSnapshot(preview.tracked, { mode: "full", snapshotId: "bulk", dryRun: true, leads });
+    expect(dry).toMatchObject({ wouldLink: 1000, wouldInsert: 0, wouldArchive: 0, inserted: 0, linked: 0, activities: 100 });
+    expect(preview.calls).toBeLessThanOrEqual(3);
+    expect(await db.get<{ n: number }>("SELECT COUNT(*) AS n FROM odoo_snapshot_seen")).toMatchObject({ n: 0 });
+    expect(await db.get<{ n: number }>("SELECT COUNT(*) AS n FROM activities")).toMatchObject({ n: 0 });
+
+    const live = counting(db);
+    const written = await ingestSnapshot(live.tracked, { mode: "full", snapshotId: "bulk", leads });
+    expect(written).toMatchObject({ linked: 1000, inserted: 0, archived: 0, activities: 100 });
+    expect(live.calls).toBeLessThan(40);
+    expect(live.calls).toBeLessThan(leads.length / 10);
+    expect(live.sizes.length).toBeGreaterThan(0);
+    expect(Math.max(...live.sizes)).toBeLessThanOrEqual(SQL_BATCH_LIMIT);
+    expect(await db.get<{ n: number }>("SELECT COUNT(*) AS n FROM leads")).toMatchObject({ n: 1001 });
+    expect(await db.get<{ stage: string; odoo_id: string; import_key: string }>("SELECT stage, odoo_id, import_key FROM leads WHERE import_key = 'excel:0'")).toMatchObject({
+      stage: "NEGOCIACIÓN",
+      odoo_id: "1",
+      import_key: "excel:0",
+    });
+    expect(await db.get<{ n: number }>("SELECT COUNT(*) AS n FROM activities")).toMatchObject({ n: 100 });
+    expect((await db.get<{ lead_import_key: string }>("SELECT lead_import_key FROM activities WHERE odoo_lead_id = '1'"))?.lead_import_key).toBe("excel:0");
+
+    await db.batch(
+      Array.from({ length: 1000 }, (_, i) => ({
+        sql: "INSERT INTO leads (import_key, name, stage, customer, created_at, active, won_status) VALUES (?, ?, 'LEAD', 'Nadie', '2020-01-01', 1, ?)",
+        params: [`extra:${i}`, `Extra ${i}`, i === 0 ? "Ganado" : "Pendiente"],
+      })),
+    );
+    const commit = counting(db);
+    const committed = await commitSnapshot(commit.tracked, { snapshotId: "bulk" });
+    expect(committed).toMatchObject({ seen: 1000, archived: 1000 });
+    expect(commit.calls).toBeLessThan(40);
+    expect(commit.sizes.length).toBeGreaterThan(0);
+    expect(Math.max(...commit.sizes)).toBeLessThanOrEqual(SQL_BATCH_LIMIT);
+    expect(await db.get<{ active: number; won_status: string; missing_from_odoo: number }>("SELECT active, won_status, missing_from_odoo FROM leads WHERE import_key = 'extra:0'")).toMatchObject({
+      active: 0,
+      won_status: "Ganado",
+      missing_from_odoo: 1,
+    });
+    expect(await db.get<{ active: number; sync_state: string }>("SELECT active, sync_state FROM leads WHERE import_key = 'local:nuevo'")).toMatchObject({
+      active: 1,
+      sync_state: "pending_create",
+    });
+    expect(await db.get<{ active: number }>("SELECT active FROM leads WHERE import_key = 'excel:1'")).toMatchObject({ active: 1 });
+  });
 });
+
+function counting(db: SqlDb) {
+  const state = { calls: 0, sizes: [] as number[] };
+  const tracked: SqlDb = {
+    kind: "sql",
+    async exec(sql) {
+      state.calls += 1;
+      return db.exec(sql);
+    },
+    async get(sql, params) {
+      state.calls += 1;
+      return db.get(sql, params);
+    },
+    async all(sql, params) {
+      state.calls += 1;
+      return db.all(sql, params);
+    },
+    async run(sql, params) {
+      state.calls += 1;
+      return db.run(sql, params);
+    },
+    async batch(statements) {
+      state.calls += 1;
+      state.sizes.push(statements.length);
+      return db.batch(statements);
+    },
+  };
+  return { tracked, get calls() { return state.calls; }, get sizes() { return state.sizes; } };
+}
