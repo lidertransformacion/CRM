@@ -1,35 +1,54 @@
+import type { Metadata } from "next";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
+import { Lock } from "lucide-react";
 import { UserAdmin } from "@/components/auth/UserAdmin";
+import { LinkButton } from "@/components/home/LinkButton";
+import { Card } from "@/components/ui/card";
+import { EmptyState } from "@/components/ui/empty-state";
+import { PageHeader } from "@/components/ui/page-header";
 import { SESSION_COOKIE, verifySession } from "@/lib/auth/session";
 import { listUsers } from "@/lib/auth/users";
 import { getDb } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
 
+export const metadata: Metadata = { title: "Ajustes" };
+
+/** Ajustes: administración de usuarios (solo administradores). */
 export default async function AjustesPage() {
   const jar = await cookies();
   const session = await verifySession(jar.get(SESSION_COOKIE)?.value);
   if (!session) redirect("/login?next=/ajustes");
   if (session.role !== "admin") {
     return (
-      <main className="mx-auto max-w-lg px-4 py-6">
-        <h1 className="font-serif text-4xl">Ajustes</h1>
-        <p className="mt-2 text-sm text-[#667085]">Solo un administrador puede crear usuarios.</p>
-      </main>
+      <div className="page">
+        <PageHeader eyebrow="Administración" title="Ajustes" description="Usuarios y accesos del CRM." />
+        <Card>
+          <EmptyState
+            icon={<Lock />}
+            title="Solo para administradores"
+            description="Pide a un administrador que cree usuarios o restablezca contraseñas. Tu contraseña la cambias desde tu cuenta."
+            action={
+              <LinkButton href="/cuenta" variant="secondary">
+                Ir a mi cuenta
+              </LinkButton>
+            }
+          />
+        </Card>
+      </div>
     );
   }
   const users = await listUsers(await getDb());
   return (
-    <main className="mx-auto max-w-3xl space-y-4 px-4 py-6">
-      <div>
-        <p className="text-xs tracking-[0.16em] text-[#98a2b3]">ADMINISTRACIÓN</p>
-        <h1 className="font-serif text-4xl">Usuarios</h1>
-        <p className="mt-2 max-w-2xl text-sm text-[#667085]">
-          Solo se aceptan correos que terminan exactamente en @libertariocoffee.com. Cada cuenta nueva entra obligada a cambiar la contraseña.
-        </p>
-      </div>
+    <div className="page">
+      <PageHeader
+        eyebrow="Administración"
+        title="Usuarios"
+        description="Solo se aceptan correos que terminan exactamente en @libertariocoffee.com. Cada cuenta nueva entra obligada a cambiar la contraseña."
+      />
       <UserAdmin
+        currentEmail={session.email}
         initial={users.map((user) => ({
           id: user.id,
           email: user.email,
@@ -37,6 +56,6 @@ export default async function AjustesPage() {
           mustChangePassword: user.must_change_password === 1,
         }))}
       />
-    </main>
+    </div>
   );
 }

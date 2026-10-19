@@ -50,7 +50,10 @@ export default async function ComparePage({ searchParams }: { searchParams: Prom
 
       <section className="mb-6" aria-labelledby="cohortes">
         <h2 id="cohortes" className="mb-1 font-sans text-[15px] font-semibold text-ink">Cohortes de nacimiento</h2>
-        <p className="mb-3 text-xs text-ink-3">Por cada comité: cuántos pendientes nacieron ese día y cuántos siguen abiertos en el acta más reciente (#{latest}). Clic para ver la cohorte.</p>
+        <p className="mb-3 text-xs text-ink-3">
+          Por cada comité: cuántos pendientes nacieron ese día y cuántos siguen abiertos en el acta más reciente (#{latest}). <span className="max-sm:hidden">Clic</span>
+          <span className="sm:hidden">Toca un comité</span> para ver la cohorte.
+        </p>
         <StatGrid className="md:grid-cols-4 xl:grid-cols-7">
           {data.cohorts.map((cohort) => {
             const carry = latest - cohort.number;

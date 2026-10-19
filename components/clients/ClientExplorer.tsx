@@ -62,7 +62,7 @@ export function ClientExplorer({ clients }: { clients: ClientRow[] }) {
   return (
     <div className="page">
       <PageHeader eyebrow="Seguimiento" title="Clientes" description="Todo lo que ha pasado con cada cliente: oportunidades, actividades, pendientes de comité y equipos." />
-      <div className="grid gap-4 lg:grid-cols-[340px_minmax(0,1fr)] lg:items-start">
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-[340px_minmax(0,1fr)] lg:items-start [&>*]:min-w-0">
         <ClientList
           clients={clients}
           q={q}
@@ -71,14 +71,16 @@ export function ClientExplorer({ clients }: { clients: ClientRow[] }) {
           onSortChange={setSort}
           selected={selected}
           onSelect={select}
-          className={cn(listHidden && "hidden lg:flex")}
+          className={cn("min-w-0", listHidden && "hidden lg:flex")}
         />
         {listHidden && (
           <Button variant="secondary" className="justify-start lg:hidden" onClick={() => setListOpen(true)}>
-            <ChevronLeft />Cambiar de cliente
+            <ChevronLeft />Volver a clientes
           </Button>
         )}
-        <ClientDetail customer={selected} data={data} loading={loading} error={error} onRetry={() => setAttempt((value) => value + 1)} />
+        <div className={cn("min-w-0", !selected && "max-lg:hidden", selected && listOpen && "max-lg:hidden")}>
+          <ClientDetail customer={selected} data={data} loading={loading} error={error} onRetry={() => setAttempt((value) => value + 1)} />
+        </div>
       </div>
     </div>
   );

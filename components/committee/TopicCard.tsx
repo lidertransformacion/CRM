@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type MouseEvent } from "react";
 import Link from "next/link";
 import { ChevronDown, ChevronRight, Diamond, Ellipsis, ExternalLink, FileText, Link2, Paperclip, Plus, Timer, Trash, Unlink, X } from "lucide-react";
 import { carryCount, isOpen, topicIsClosed, topicStats } from "@/lib/committee/metrics";
@@ -14,6 +14,7 @@ import { Tooltip } from "@/components/ui/tooltip";
 import { cn, uid } from "@/lib/utils";
 import { PendienteRow } from "@/components/committee/PendienteRow";
 import { TAGS, matchesFilters, plural, visiblePuntos, type BoardDialog, type Filters } from "@/components/committee/helpers";
+import { useIsMobile } from "@/components/committee/use-is-mobile";
 
 type Shared = {
   doc: CommitteeDoc;
@@ -28,30 +29,42 @@ type Shared = {
   onShowAll: () => void;
 };
 
-export function TopicCard({ topic, ...shared }: Shared & { topic: Topic }) {
+export function TopicCard({ topic, autoCollapse = false, ...shared }: Shared & { topic: Topic; autoCollapse?: boolean }) {
   const { doc, filters, asOf, readOnly, freshId, onAction, onDialog } = shared;
-  const [collapsed, setCollapsed] = useState(false);
+  const isMobile = useIsMobile();
+  /* `null` = sin decisión del usuario: en móvil sigue `autoCollapse` (resuelto con CSS para no parpadear al hidratar). */
+  const [collapsed, setCollapsed] = useState<boolean | null>(() => (freshId === topic.id ? false : null));
+  const collapsedNow = collapsed ?? (autoCollapse && isMobile);
+  const autoHidden = collapsed === null && autoCollapse;
   const stats = topicStats(doc, topic);
   const puntos = visiblePuntos(doc, topic, filters, asOf);
   const hiddenPuntos = topic.puntos.length - puntos.length;
   const closed = topicIsClosed(topic);
   const totalPendientes = topic.puntos.reduce((sum, punto) => sum + punto.pendientes.length, 0);
+  /* Contraído en móvil, el título y el número no se editan: tocarlos despliega el tema. */
+  const headerLocked = readOnly || (isMobile && collapsedNow);
 
   const patch = (fields: Partial<Pick<Topic, "number" | "title" | "context" | "minutes" | "tags">>) => onAction({ type: "patchTopic", topicId: topic.id, patch: fields });
 
+  function expandFromHeader(event: MouseEvent<HTMLDivElement>) {
+    if (!isMobile || !collapsedNow) return;
+    if ((event.target as HTMLElement).closest("button, a, input, textarea, [role=button]")) return;
+    setCollapsed(false);
+  }
+
   return (
     <Card id={`tema-${topic.id}`} className={cn(closed && "bg-surface-2/60")}>
-      <div className="flex items-start gap-2 px-3 py-3 sm:gap-3 sm:px-5 sm:py-4">
+      <div className={cn("flex items-start gap-2 px-3 py-3 sm:gap-3 sm:px-5 sm:py-4", isMobile && collapsedNow && "cursor-pointer")} onClick={expandFromHeader}>
         <Button
           variant="ghost"
           size="icon-sm"
-          aria-expanded={!collapsed}
+          aria-expanded={!collapsedNow}
           aria-controls={`tema-body-${topic.id}`}
-          aria-label={collapsed ? "Mostrar el tema" : "Contraer el tema"}
-          onClick={() => setCollapsed((value) => !value)}
-          className="mt-0.5 shrink-0"
+          aria-label={collapsedNow ? "Mostrar el tema" : "Contraer el tema"}
+          onClick={() => setCollapsed(!collapsedNow)}
+          className="mt-0.5 shrink-0 max-sm:-ml-1 max-sm:mt-0"
         >
-          <ChevronDown className={cn("transition-transform", collapsed && "-rotate-90")} />
+          <ChevronDown className={cn("transition-transform", collapsed === true && "-rotate-90", autoHidden && "max-sm:-rotate-90")} />
         </Button>
         <EditableText
           type="number"
@@ -61,58 +74,68 @@ export function TopicCard({ topic, ...shared }: Shared & { topic: Topic }) {
             if (Number.isFinite(number) && number > 0) patch({ number });
           }}
           ariaLabel="Número del tema"
-          disabled={readOnly}
-          className="num mt-0.5 shrink-0 font-serif text-2xl leading-none text-ink-3"
+          disabled={headerLocked}
+          className="num mt-0.5 shrink-0 font-serif text-2xl leading-none text-ink-3 max-sm:mt-1.5"
           inputClassName="w-16"
         />
-        <div className="min-w-0 flex-1">
+        <div className="min-w-0 flex-1 max-sm:pt-1">
           <EditableText
             as="h2"
             value={topic.title}
             onCommit={(title) => patch({ title })}
             placeholder="Nombre del tema"
             ariaLabel="Título del tema"
-            disabled={readOnly}
+            disabled={headerLocked}
             autoEdit={freshId === topic.id}
             className={cn("font-sans text-base font-semibold text-ink sm:text-lg", closed && "text-ink-2")}
           />
           <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-            {TAGS.map((tag) => {
-              const on = topic.tags.includes(tag);
-              if (readOnly && !on) return null;
-              return (
-                <button
-                  key={tag}
-                  type="button"
-                  aria-pressed={on}
+            {/* Móvil: las etiquetas y los minutos van en una fila desplazable que solo se ve con el tema abierto;
+                el resumen "N abiertos · M arrastrados" sube a la primera línea. En escritorio todo sigue en una fila. */}
+            <div
+              className={cn(
+                "max-sm:flex max-sm:w-full max-sm:items-center max-sm:gap-1.5 max-sm:overflow-x-auto max-sm:[scrollbar-width:none] max-sm:[&::-webkit-scrollbar]:hidden sm:contents",
+                (collapsed === true || autoHidden) && "max-sm:hidden",
+              )}
+            >
+              {TAGS.map((tag) => {
+                const on = topic.tags.includes(tag);
+                if (readOnly && !on) return null;
+                return (
+                  <button
+                    key={tag}
+                    type="button"
+                    aria-pressed={on}
+                    disabled={readOnly}
+                    onClick={() => patch({ tags: on ? topic.tags.filter((item) => item !== tag) : [...topic.tags, tag] })}
+                    className={cn(
+                      badgeVariants({ tone: on ? "info" : "outline", size: "sm" }),
+                      "max-sm:h-7 max-sm:shrink-0 max-sm:px-2.5 max-sm:text-xs",
+                      !on && "border-dashed text-ink-3",
+                      !readOnly && "cursor-pointer transition-colors hover:border-navy-2",
+                    )}
+                    title={readOnly ? undefined : on ? `Quitar etiqueta ${tag}` : `Etiquetar como ${tag}`}
+                  >
+                    {tag}
+                  </button>
+                );
+              })}
+              <span className="inline-flex items-center gap-1 text-xs text-ink-2 max-sm:shrink-0">
+                <Timer className="size-3.5 text-ink-3" aria-hidden />
+                <EditableText
+                  type="number"
+                  value={topic.minutes == null ? "" : String(topic.minutes)}
+                  onCommit={(value) => patch({ minutes: value.trim() === "" ? null : Math.max(0, Number(value)) })}
+                  placeholder="—"
+                  ariaLabel="Minutos asignados al tema"
                   disabled={readOnly}
-                  onClick={() => patch({ tags: on ? topic.tags.filter((item) => item !== tag) : [...topic.tags, tag] })}
-                  className={cn(
-                    badgeVariants({ tone: on ? "info" : "outline", size: "sm" }),
-                    !on && "border-dashed text-ink-3",
-                    !readOnly && "cursor-pointer transition-colors hover:border-navy-2",
-                  )}
-                  title={readOnly ? undefined : on ? `Quitar etiqueta ${tag}` : `Etiquetar como ${tag}`}
-                >
-                  {tag}
-                </button>
-              );
-            })}
-            <span className="inline-flex items-center gap-1 text-xs text-ink-2">
-              <Timer className="size-3.5 text-ink-3" aria-hidden />
-              <EditableText
-                type="number"
-                value={topic.minutes == null ? "" : String(topic.minutes)}
-                onCommit={(value) => patch({ minutes: value.trim() === "" ? null : Math.max(0, Number(value)) })}
-                placeholder="—"
-                ariaLabel="Minutos asignados al tema"
-                disabled={readOnly}
-                className="text-xs"
-                inputClassName="w-14 text-xs"
-              />
-              min
-            </span>
-            <span className="num ml-auto text-xs text-ink-2">
+                  className="text-xs"
+                  inputClassName="w-14 text-xs"
+                />
+                min
+              </span>
+            </div>
+            <span className="num ml-auto text-xs text-ink-2 max-sm:order-first max-sm:ml-0">
               {plural(stats.open, "abierto", "abiertos")}
               {stats.carried > 0 && (
                 <>
@@ -121,7 +144,7 @@ export function TopicCard({ topic, ...shared }: Shared & { topic: Topic }) {
                 </>
               )}
             </span>
-            {closed && <Badge tone="ok" dot>Cerrado</Badge>}
+            {closed && <Badge tone="ok" dot className="max-sm:order-first">Cerrado</Badge>}
           </div>
         </div>
         {!readOnly && (
@@ -147,8 +170,8 @@ export function TopicCard({ topic, ...shared }: Shared & { topic: Topic }) {
         )}
       </div>
 
-      {!collapsed && (
-        <CardBody id={`tema-body-${topic.id}`} className="space-y-5 border-t border-line-2 px-3 sm:px-5">
+      {collapsed !== true && (
+        <CardBody id={`tema-body-${topic.id}`} className={cn("space-y-5 border-t border-line-2 px-3 sm:px-5", autoHidden && "max-sm:hidden")}>
           {(topic.context || !readOnly) && (
             <section>
               <p className="eyebrow mb-1">Contexto</p>

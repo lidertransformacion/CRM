@@ -107,7 +107,7 @@ export function Drafts({
           <EmptyState title="No hay plantillas" description="Las plantillas se cargan en la base al iniciar el CRM. Reinicia el servidor o importa los datos de nuevo." />
         </Card>
       ) : (
-        <div className="grid gap-4 lg:grid-cols-[380px_minmax(0,1fr)] lg:items-start">
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-[380px_minmax(0,1fr)] lg:items-start">
           <div className="space-y-4">
             <Card>
               <CardHeader title={<StepHeader step={1} title="Plantilla" hint="El asunto de ejemplo muestra entre corchetes lo que se rellena." done />}  />

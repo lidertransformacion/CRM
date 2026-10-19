@@ -7,7 +7,10 @@ import { cn, cop, displaySeller, shortDate } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { isOverdue } from "@/components/pipeline/stage-meta";
 
-/** Tarjeta del tablero: se arrastra entre columnas y, al hacer clic, abre el panel de la oportunidad. */
+/**
+ * Tarjeta del tablero: al hacer clic (o tocar) abre el panel de la oportunidad.
+ * Con `onDragStart` además se puede arrastrar entre columnas (solo escritorio).
+ */
 export function LeadCard({
   lead,
   today,
@@ -28,12 +31,13 @@ export function LeadCard({
   const dueToday = !!lead.next_activity_deadline && lead.next_activity_deadline.slice(0, 10) === today;
   const probability = lead.probability == null ? null : Math.max(0, Math.min(100, Math.round(lead.probability)));
   const hasFooter = overdue || !!lead.next_activity_deadline || !lead.active || !!lead.edited_locally;
+  const draggable = !!onDragStart;
 
   return (
     <article
       role="button"
       tabIndex={0}
-      draggable={!!onDragStart}
+      draggable={draggable}
       aria-label={`Abrir ${title}`}
       onClick={() => onOpen(lead.import_key)}
       onKeyDown={(event) => {
@@ -49,15 +53,15 @@ export function LeadCard({
       }}
       onDragEnd={onDragEnd}
       className={cn(
-        "group/card relative rounded-lg border border-line-2 bg-surface p-3 shadow-card transition-[box-shadow,opacity,border-color] hover:border-line hover:shadow-pop focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-navy-2/40",
-        onDragStart ? "cursor-grab active:cursor-grabbing" : "cursor-pointer",
+        "group/card relative rounded-lg border border-line-2 bg-surface p-3 shadow-card transition-[box-shadow,opacity,border-color] hover:border-line hover:shadow-pop focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-navy-2/40 max-sm:p-3.5 max-sm:active:bg-surface-2",
+        draggable ? "cursor-grab active:cursor-grabbing" : "cursor-pointer",
         dragging && "opacity-40",
       )}
     >
-      {onDragStart && <GripVertical className="absolute right-2 top-3 size-3.5 text-ink-3 opacity-0 transition-opacity group-hover/card:opacity-100" aria-hidden />}
-      <p className="pr-4 text-sm font-semibold leading-snug text-ink">{title}</p>
-      {lead.customer && <p className="mt-0.5 line-clamp-2 text-xs text-ink-2">{lead.name}</p>}
-      <div className="mt-2 flex items-center justify-between gap-2 text-xs">
+      {draggable && <GripVertical className="absolute right-2 top-3 size-3.5 text-ink-3 opacity-0 transition-opacity group-hover/card:opacity-100" aria-hidden />}
+      <p className={cn("text-sm font-semibold leading-snug text-ink max-sm:text-[15px]", draggable && "pr-4")}>{title}</p>
+      {lead.customer && <p className="mt-0.5 line-clamp-2 text-xs text-ink-2 max-sm:text-[13px]">{lead.name}</p>}
+      <div className="mt-2 flex items-center justify-between gap-2 text-xs max-sm:text-[13px]">
         <span className="inline-flex min-w-0 items-center gap-1 text-ink-2">
           <UserRound className="size-3 shrink-0 text-ink-3" aria-hidden />
           <span className="truncate">{displaySeller(lead.salesperson)}</span>

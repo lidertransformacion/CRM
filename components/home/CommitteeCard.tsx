@@ -10,7 +10,7 @@ import { cn, longDate } from "@/lib/utils";
 export function CommitteeCard({ committee, asOf }: { committee: CommitteeSummary; asOf: string }) {
   const upcoming = committee.heldOn >= asOf;
   return (
-    <Card className="flex flex-col">
+    <Card className="flex min-w-0 flex-col">
       <CardHeader
         eyebrow={upcoming ? "Próximo comité" : "Comité en curso"}
         title={`Comité ${committee.number}`}
@@ -25,12 +25,13 @@ export function CommitteeCard({ committee, asOf }: { committee: CommitteeSummary
         {committee.people.length > 0 && (
           <div className="mt-4">
             <p className="eyebrow mb-2">Más pendientes abiertos</p>
-            <div className="flex flex-wrap gap-1.5">
+            {/* Escritorio: chips en varias líneas. Móvil: una sola fila desplazable que sangra hasta el borde de la tarjeta. */}
+            <div className="flex flex-wrap gap-1.5 max-sm:-mx-5 max-sm:flex-nowrap max-sm:overflow-x-auto max-sm:snap-x max-sm:scroll-px-5 max-sm:px-5 max-sm:pb-1 max-sm:[scrollbar-width:none] max-sm:[&::-webkit-scrollbar]:hidden">
               {committee.people.map((person) => (
                 <Link
                   key={person.name}
                   href={person.href}
-                  className="inline-flex h-8 items-center gap-1.5 rounded-full border border-line bg-surface px-3 text-xs font-medium text-ink-2 transition-colors hover:border-[rgba(24,43,85,.3)] hover:text-ink"
+                  className="inline-flex h-8 shrink-0 snap-start items-center gap-1.5 rounded-full border border-line bg-surface px-3 text-xs font-medium text-ink-2 transition-colors hover:border-[rgba(24,43,85,.3)] hover:text-ink max-sm:h-10 max-sm:text-[13px]"
                 >
                   {person.name}
                   <span className="num rounded-full bg-accent-soft px-1.5 text-[11px] leading-4">{person.open}</span>
@@ -45,12 +46,12 @@ export function CommitteeCard({ committee, asOf }: { committee: CommitteeSummary
           </div>
         )}
       </CardBody>
-      <CardFooter className="justify-start">
-        <LinkButton href="/comites">
+      <CardFooter className="justify-start max-sm:flex-col max-sm:items-stretch">
+        <LinkButton href="/comites" className="max-sm:w-full">
           <ClipboardList />
           Abrir comité
         </LinkButton>
-        <LinkButton href="/comites?correo=1" variant="secondary">
+        <LinkButton href="/comites?correo=1" variant="secondary" className="max-sm:w-full">
           <Mail />
           Redactar correo resumen
         </LinkButton>
@@ -61,7 +62,7 @@ export function CommitteeCard({ committee, asOf }: { committee: CommitteeSummary
 
 function Figure({ label, value, tone = "neutral" }: { label: string; value: number; tone?: "neutral" | "ok" }) {
   return (
-    <div className="rounded-md bg-surface-2 px-3 py-2">
+    <div className="min-w-0 rounded-md bg-surface-2 px-3 py-2 max-sm:px-2.5">
       <dt className="text-[11px] leading-tight text-ink-3">{label}</dt>
       <dd className={cn("num mt-0.5 text-xl font-semibold leading-none", tone === "ok" ? "text-ok" : "text-ink")}>{value}</dd>
     </div>

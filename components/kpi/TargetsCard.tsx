@@ -23,6 +23,7 @@ import {
   type KpiTarget,
   type MetricDef,
   type MetricId,
+  type TargetStatus,
 } from "@/components/kpi/targets";
 
 type PendingDelete = { target: KpiTarget; metric: MetricDef };
@@ -79,18 +80,59 @@ export function TargetsCard({
     }
   }
 
+  function handleMonth(value: string) {
+    if (value) onMonthChange(value);
+  }
+
   return (
     <Card ref={cardRef}>
       <CardHeader
         title={`Metas de ${displayName} · ${monthLabel(month)}`}
         description="Cada meta se compara con el número real del corte de hoy. «En camino» es llegar al 70 % o más."
         actions={
-          <Field label="Mes" inline htmlFor="kpi-targets-month">
-            <Input id="kpi-targets-month" type="month" value={month} onChange={(event) => event.target.value && onMonthChange(event.target.value)} className="w-[170px]" aria-label="Mes de las metas" />
+          <Field label="Mes" inline htmlFor="kpi-targets-month" className="max-sm:hidden">
+            <Input id="kpi-targets-month" type="month" value={month} onChange={(event) => handleMonth(event.target.value)} className="w-[170px]" aria-label="Mes de las metas" />
           </Field>
         }
       />
-      <div className="overflow-auto">
+
+      {/* Móvil: selector de mes a ancho completo y una fila por métrica. */}
+      <div className="sm:hidden">
+        <div className="border-b border-line-2 px-4 py-3">
+          <Field label="Mes de las metas" htmlFor="kpi-targets-month-mobile">
+            <Input id="kpi-targets-month-mobile" type="month" value={month} onChange={(event) => handleMonth(event.target.value)} />
+          </Field>
+        </div>
+        <ul className="divide-y divide-line-2">
+          {rows.map(({ metric, target, actual, progress, status }) => {
+            const meta = STATUS_LABEL[status];
+            return (
+              <li key={metric.id} className="px-4 py-3">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0 flex-1 pt-1">
+                    <p className="text-sm font-medium text-ink">
+                      {metric.label}
+                      {metric.lowerIsBetter && <span className="ml-1.5 text-[11px] font-normal text-ink-3">menos es mejor</span>}
+                    </p>
+                    <p className="num mt-0.5 text-sm">
+                      <span className="font-semibold text-ink">{formatMetricValue(metric, actual)}</span>
+                      <span className="text-ink-3"> / {target ? formatMetricValue(metric, target.target_value) : "sin meta"}</span>
+                    </p>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-1">
+                    <Badge tone={meta.tone} dot>{meta.label}</Badge>
+                    <TargetMenu metric={metric} target={target} onDefine={onDefine} onDelete={(item) => setPendingDelete({ target: item, metric })} size="icon" />
+                  </div>
+                </div>
+                {progress != null && <Progress progress={progress} status={status} className="mt-2" fluid />}
+              </li>
+            );
+          })}
+        </ul>
+      </div>
+
+      {/* Escritorio: tabla. */}
+      <div className="overflow-auto max-sm:hidden">
         <Table className="min-w-[720px]">
           <THead>
             <tr>
@@ -113,37 +155,10 @@ export function TargetsCard({
                   </TD>
                   <TD align="right" className="whitespace-nowrap">{formatMetricValue(metric, actual)}</TD>
                   <TD align="right" className={cn("whitespace-nowrap", !target && "text-ink-3")}>{target ? formatMetricValue(metric, target.target_value) : "—"}</TD>
-                  <TD>
-                    {progress == null ? (
-                      <span className="text-xs text-ink-3">—</span>
-                    ) : (
-                      <div className="flex items-center gap-2">
-                        <div className="h-2 w-28 shrink-0 overflow-hidden rounded-full bg-accent-soft" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.min(100, Math.round(progress * 100))}>
-                          <div className={cn("h-full rounded-full", status === "met" ? "bg-ok" : status === "on_track" ? "bg-info" : "bg-warn")} style={{ width: `${Math.min(100, Math.round(progress * 100))}%` }} />
-                        </div>
-                        <span className="num text-xs text-ink-2">{Math.round(progress * 100)} %</span>
-                      </div>
-                    )}
-                  </TD>
+                  <TD>{progress == null ? <span className="text-xs text-ink-3">—</span> : <Progress progress={progress} status={status} />}</TD>
                   <TD><Badge tone={meta.tone} dot>{meta.label}</Badge></TD>
                   <TD align="right">
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <Button variant="ghost" size="icon-sm" aria-label={`Acciones de la meta ${metric.label}`}>
-                          <Ellipsis />
-                        </Button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent>
-                        {target ? (
-                          <>
-                            <DropdownMenuItem onSelect={() => window.setTimeout(() => onDefine(metric.id, target), 0)}><Pencil /> Editar meta</DropdownMenuItem>
-                            <DropdownMenuItem danger onSelect={() => window.setTimeout(() => setPendingDelete({ target, metric }), 0)}><Trash /> Eliminar meta</DropdownMenuItem>
-                          </>
-                        ) : (
-                          <DropdownMenuItem onSelect={() => window.setTimeout(() => onDefine(metric.id), 0)}><Plus /> Definir meta</DropdownMenuItem>
-                        )}
-                      </DropdownMenuContent>
-                    </DropdownMenu>
+                    <TargetMenu metric={metric} target={target} onDefine={onDefine} onDelete={(item) => setPendingDelete({ target: item, metric })} size="icon-sm" />
                   </TD>
                 </TR>
               );
@@ -151,10 +166,16 @@ export function TargetsCard({
           </TBody>
         </Table>
       </div>
+
       <CardFooter className="justify-start text-xs text-ink-3">
-        {defined === 0
-          ? `Sin metas para ${displayName} en ${monthLabel(month)}. Usa «Definir meta» arriba a la derecha o el menú de cada fila.`
-          : `${defined} de ${KPI_METRICS.length} métricas con meta. Las metas del equipo y las de cada vendedor son independientes.`}
+        {defined === 0 ? (
+          <>
+            <span className="max-sm:hidden">Sin metas para {displayName} en {monthLabel(month)}. Usa «Definir meta» arriba a la derecha o el menú de cada fila.</span>
+            <span className="sm:hidden">Sin metas para {displayName} en {monthLabel(month)}. Usa «Definir meta» arriba o el menú de cada métrica.</span>
+          </>
+        ) : (
+          `${defined} de ${KPI_METRICS.length} métricas con meta. Las metas del equipo y las de cada vendedor son independientes.`
+        )}
       </CardFooter>
 
       <Dialog open={!!pendingDelete} onOpenChange={(open) => !open && !deleting && setPendingDelete(null)}>
@@ -173,5 +194,54 @@ export function TargetsCard({
         </DialogContent>
       </Dialog>
     </Card>
+  );
+}
+
+/** Barra de progreso hacia la meta: ancho fijo en la tabla, a ancho completo (`fluid`) en la lista de móvil. */
+function Progress({ progress, status, fluid = false, className }: { progress: number; status: TargetStatus; fluid?: boolean; className?: string }) {
+  const percent = Math.round(progress * 100);
+  const capped = Math.min(100, percent);
+  return (
+    <div className={cn("flex items-center gap-2", className)}>
+      <div className={cn("h-2 shrink-0 overflow-hidden rounded-full bg-accent-soft", fluid ? "min-w-0 flex-1" : "w-28")} role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={capped}>
+        <div className={cn("h-full rounded-full", status === "met" ? "bg-ok" : status === "on_track" ? "bg-info" : "bg-warn")} style={{ width: `${capped}%` }} />
+      </div>
+      <span className={cn("num text-xs text-ink-2", fluid && "w-11 shrink-0 text-right")}>{percent} %</span>
+    </div>
+  );
+}
+
+/** Menú ⋯ de una métrica: definir, editar o eliminar su meta. En móvil el botón mide 44 px. */
+function TargetMenu({
+  metric,
+  target,
+  onDefine,
+  onDelete,
+  size,
+}: {
+  metric: MetricDef;
+  target: KpiTarget | undefined;
+  onDefine: (metric: MetricId, existing?: KpiTarget) => void;
+  onDelete: (target: KpiTarget) => void;
+  size: "icon" | "icon-sm";
+}) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button variant="ghost" size={size} aria-label={`Acciones de la meta ${metric.label}`}>
+          <Ellipsis />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent>
+        {target ? (
+          <>
+            <DropdownMenuItem onSelect={() => window.setTimeout(() => onDefine(metric.id, target), 0)}><Pencil /> Editar meta</DropdownMenuItem>
+            <DropdownMenuItem danger onSelect={() => window.setTimeout(() => onDelete(target), 0)}><Trash /> Eliminar meta</DropdownMenuItem>
+          </>
+        ) : (
+          <DropdownMenuItem onSelect={() => window.setTimeout(() => onDefine(metric.id), 0)}><Plus /> Definir meta</DropdownMenuItem>
+        )}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }

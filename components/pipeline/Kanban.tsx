@@ -6,14 +6,20 @@ import type { LeadRecord } from "@/lib/db";
 import type { StageDef } from "@/lib/odoo/stages";
 import { cn, cop } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { Segmented } from "@/components/ui/segmented";
 import { Tooltip } from "@/components/ui/tooltip";
 import { LeadCard } from "@/components/pipeline/LeadCard";
+import { useIsMobile } from "@/components/pipeline/use-media";
 import { type Bucket, CLOSED_STAGE_DEFS, compactCop, GROUP_META, OPEN_STAGE_DEFS, stageGroup, sumRevenue } from "@/components/pipeline/stage-meta";
 
+/** Tiempo máximo que se ignoran los eventos de scroll tras un salto con el selector (evita que parpadee). */
+const JUMP_SETTLE_MS = 900;
+
 /**
- * Tablero por etapas. Las seis etapas abiertas van anchas; Ganado, Recurrente y Perdida
- * van colapsadas (solo conteo e ingreso) para que el foco esté en lo que sigue en curso.
- * Arrastrar una tarjeta a otra columna guarda el cambio; hacer clic la abre.
+ * Tablero por etapas. En escritorio las seis etapas abiertas van anchas; Ganado, Recurrente y Perdida
+ * van colapsadas (solo conteo e ingreso) y las tarjetas se arrastran entre columnas.
+ * En el celular hay una columna por pantalla (desplazamiento horizontal con snap), un selector de etapa
+ * pegajoso para saltar entre columnas y ninguna columna colapsada; la etapa se cambia desde el panel.
  */
 export function Kanban({
   leads,
@@ -28,9 +34,14 @@ export function Kanban({
   onMove: (importKey: string, stage: string) => void;
   onOpen: (importKey: string) => void;
 }) {
+  const isMobile = useIsMobile();
   const [expanded, setExpanded] = React.useState<Record<string, boolean>>({});
   const [dragging, setDragging] = React.useState<string | null>(null);
   const [over, setOver] = React.useState<string | null>(null);
+  const [activeIndex, setActiveIndex] = React.useState(0);
+  const scrollerRef = React.useRef<HTMLDivElement>(null);
+  const selectorRef = React.useRef<HTMLDivElement>(null);
+  const jumpRef = React.useRef<{ index: number; until: number } | null>(null);
 
   const byStage = React.useMemo(() => {
     const map = new Map<string, LeadRecord[]>();
@@ -41,6 +52,68 @@ export function Kanban({
     }
     return map;
   }, [leads]);
+
+  // Columnas del celular: las abiertas y, salvo con el foco en "Abiertas", también las cerradas (completas).
+  const mobileStages = React.useMemo(() => (focus === "open" ? OPEN_STAGE_DEFS : [...OPEN_STAGE_DEFS, ...CLOSED_STAGE_DEFS]), [focus]);
+  const current = Math.min(activeIndex, mobileStages.length - 1);
+
+  // En el celular, seguir la columna visible para marcar el selector y el indicador "n/9".
+  React.useEffect(() => {
+    const scroller = scrollerRef.current;
+    if (!isMobile || !scroller) return;
+    let frame = 0;
+    const update = () => {
+      frame = 0;
+      const columns = Array.from(scroller.children) as HTMLElement[];
+      if (!columns.length) return;
+      const origin = columns[0].offsetLeft;
+      let best = 0;
+      let bestDistance = Number.POSITIVE_INFINITY;
+      columns.forEach((column, index) => {
+        const distance = Math.abs(column.offsetLeft - origin - scroller.scrollLeft);
+        if (distance < bestDistance) {
+          bestDistance = distance;
+          best = index;
+        }
+      });
+      const jump = jumpRef.current;
+      if (jump) {
+        if (best === jump.index || Date.now() > jump.until) jumpRef.current = null;
+        else return;
+      }
+      setActiveIndex(best);
+    };
+    const onScroll = () => {
+      if (!frame) frame = window.requestAnimationFrame(update);
+    };
+    scroller.addEventListener("scroll", onScroll, { passive: true });
+    update();
+    return () => {
+      scroller.removeEventListener("scroll", onScroll);
+      if (frame) window.cancelAnimationFrame(frame);
+    };
+  }, [isMobile, mobileStages]);
+
+  // Mantener centrada la pestaña activa del selector de etapa.
+  React.useEffect(() => {
+    const list = selectorRef.current?.querySelector<HTMLElement>('[role="tablist"]');
+    const tab = list?.querySelector<HTMLElement>('[aria-selected="true"]');
+    if (!list || !tab) return;
+    const listRect = list.getBoundingClientRect();
+    const tabRect = tab.getBoundingClientRect();
+    const target = list.scrollLeft + (tabRect.left - listRect.left) - (listRect.width - tabRect.width) / 2;
+    list.scrollTo({ left: Math.max(0, target), behavior: "smooth" });
+  }, [current]);
+
+  function jumpTo(index: number) {
+    const scroller = scrollerRef.current;
+    const columns = scroller ? (Array.from(scroller.children) as HTMLElement[]) : [];
+    const column = columns[index];
+    if (!scroller || !column) return;
+    jumpRef.current = { index, until: Date.now() + JUMP_SETTLE_MS };
+    setActiveIndex(index);
+    scroller.scrollTo({ left: column.offsetLeft - columns[0].offsetLeft, behavior: "smooth" });
+  }
 
   function drop(event: React.DragEvent, stage: string) {
     event.preventDefault();
@@ -62,14 +135,17 @@ export function Kanban({
     onDrop: (event: React.DragEvent) => drop(event, stage),
   });
 
+  // En pantallas táctiles no hay arrastre: la tarjeta solo abre el panel.
   const cardProps = {
     today,
     onOpen,
-    onDragStart: (key: string) => setDragging(key),
-    onDragEnd: () => {
-      setDragging(null);
-      setOver(null);
-    },
+    onDragStart: isMobile ? undefined : (key: string) => setDragging(key),
+    onDragEnd: isMobile
+      ? undefined
+      : () => {
+          setDragging(null);
+          setOver(null);
+        },
   };
 
   // Con el foco en Ganadas/Perdidas/Recurrentes solo se muestra esa columna, ancha y en rejilla.
@@ -93,7 +169,24 @@ export function Kanban({
 
   return (
     <div>
-      <div className="flex items-start gap-3 overflow-x-auto pb-3">
+      {/* Celular: selector de etapa pegajoso bajo la cabecera de la app, con conteos e indicador de posición. */}
+      <div ref={selectorRef} className="sticky top-14 z-10 -mx-4 mb-2 flex items-center gap-2 bg-bg/95 px-4 py-2 backdrop-blur sm:hidden">
+        <Segmented<string>
+          ariaLabel="Ir a la etapa"
+          className="min-w-0 flex-1"
+          value={mobileStages[current].name}
+          onChange={(name) => jumpTo(mobileStages.findIndex((stage) => stage.name === name))}
+          options={mobileStages.map((stage) => ({ value: stage.name, label: stage.short, count: (byStage.get(stage.name) ?? []).length }))}
+        />
+        <span className="num shrink-0 text-xs text-ink-3" aria-live="polite">
+          {current + 1}/{mobileStages.length}
+        </span>
+      </div>
+
+      <div
+        ref={scrollerRef}
+        className="relative flex items-start gap-3 overflow-x-auto pb-3 max-sm:-mx-4 max-sm:snap-x max-sm:snap-mandatory max-sm:scroll-pl-4 max-sm:px-4"
+      >
         {OPEN_STAGE_DEFS.map((stage) => {
           const cards = byStage.get(stage.name) ?? [];
           return (
@@ -107,6 +200,17 @@ export function Kanban({
         {CLOSED_STAGE_DEFS.map((stage) => {
           const cards = byStage.get(stage.name) ?? [];
           const revenue = sumRevenue(cards);
+          if (isMobile) {
+            // En el celular no hay columnas colapsadas: con el foco en abiertas se omiten; si no, van completas.
+            if (focus === "open") return null;
+            return (
+              <Column key={stage.name} stage={stage} count={cards.length} revenue={revenue} over={false} dragging={false} {...dropProps(stage.name)}>
+                {cards.map((lead) => (
+                  <LeadCard key={lead.import_key} lead={lead} {...cardProps} />
+                ))}
+              </Column>
+            );
+          }
           const isExpanded = focus === "all" && !!expanded[stage.name];
           if (!isExpanded) {
             return (
@@ -141,7 +245,7 @@ export function Kanban({
           );
         })}
       </div>
-      <p className="mt-1 text-xs text-ink-3 lg:hidden">En el celular no se puede arrastrar: abre la tarjeta y cambia la etapa desde el panel.</p>
+      <p className="mt-1 text-xs text-ink-3 lg:hidden">Toca una tarjeta para abrirla y cambiar su etapa desde el panel.</p>
     </div>
   );
 }
@@ -189,6 +293,8 @@ function Column({
       aria-label={`${stage.short}: ${count} oportunidades`}
       className={cn(
         "flex max-h-[72vh] w-[280px] shrink-0 flex-col rounded-xl border border-line-2 border-t-[3px] bg-surface-2/70 transition-[box-shadow,background-color]",
+        // Celular: una columna por pantalla, con snap y la altura que deja libre la cabecera + el selector + la barra inferior.
+        "max-sm:w-[calc(100vw-2rem)] max-sm:snap-start max-sm:max-h-[calc(100dvh-11.5rem-env(safe-area-inset-bottom))]",
         meta.line,
         over && "bg-accent-soft ring-2 ring-navy-2/50",
       )}

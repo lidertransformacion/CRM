@@ -2,11 +2,13 @@
 
 import * as React from "react";
 import { usePathname, useSearchParams } from "next/navigation";
-import { List, SquareKanban, X } from "lucide-react";
+import { List, SlidersHorizontal, SquareKanban, X } from "lucide-react";
 import type { LeadRecord } from "@/lib/db";
 import { cn, cop, displaySeller } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Chip } from "@/components/ui/chip";
+import { Dialog, DialogBody, DialogContent, DialogFooter } from "@/components/ui/dialog";
+import { Field } from "@/components/ui/field";
 import { PageHeader, Toolbar } from "@/components/ui/page-header";
 import { SearchInput } from "@/components/ui/search-input";
 import { Segmented } from "@/components/ui/segmented";
@@ -24,6 +26,7 @@ const VIEW_STORAGE = "crm.pipeline.view";
 /**
  * Pantalla del pipeline: resumen clicable, filtros, tablero o lista y panel de detalle.
  * La oportunidad abierta vive en la URL (`?lead=`) para que ⌘K, Inicio y Clientes puedan enlazarla.
+ * En el celular los selects y chips de filtro van en un diálogo "Filtros" y el resumen queda en 2 × 2.
  */
 export function PipelineBoard({ initial, today }: { initial: LeadRecord[]; today: string }) {
   const pathname = usePathname();
@@ -41,6 +44,7 @@ export function PipelineBoard({ initial, today }: { initial: LeadRecord[]; today
   const [overdueOnly, setOverdueOnly] = React.useState(false);
   const [bucket, setBucket] = React.useState<Bucket>("all");
   const [savingKey, setSavingKey] = React.useState<string | null>(null);
+  const [filtersOpen, setFiltersOpen] = React.useState(false);
 
   React.useEffect(() => setQ(urlQuery), [urlQuery]);
 
@@ -110,7 +114,7 @@ export function PipelineBoard({ initial, today }: { initial: LeadRecord[]; today
 
   React.useEffect(() => {
     if (selectedKey && !selected) {
-      toast({ title: "No encontramos esa oportunidad", description: "Puede que el export haya cambiado. Búscala con ⌘K.", tone: "warn" });
+      toast({ title: "No encontramos esa oportunidad", description: "Puede que el export haya cambiado. Búscala con el buscador.", tone: "warn" });
       setLeadParam(null);
     }
   }, [selectedKey, selected, toast, setLeadParam]);
@@ -143,16 +147,42 @@ export function PipelineBoard({ initial, today }: { initial: LeadRecord[]; today
     setBucket((current) => (current === next ? "all" : next));
   }
 
-  function clearFilters() {
-    setQ("");
+  /** Limpia los filtros que viven en el diálogo del celular (vendedor, equipo, activas, vencidas). */
+  function clearDialogFilters() {
     setSeller("");
     setTeam("");
     setActiveOnly(false);
     setOverdueOnly(false);
+  }
+
+  function clearFilters() {
+    setQ("");
+    clearDialogFilters();
     setBucket("all");
   }
 
   const hasFilters = !!q || !!seller || !!team || activeOnly || overdueOnly || bucket !== "all";
+  const dialogFilters = (seller ? 1 : 0) + (team ? 1 : 0) + (activeOnly ? 1 : 0) + (overdueOnly ? 1 : 0);
+  const openActive = bucket === "open" && !overdueOnly;
+
+  const sellerSelect = (id?: string, className?: string) => (
+    <Select id={id} value={seller} onChange={(event) => setSeller(event.target.value)} aria-label={id ? undefined : "Vendedor"} className={className}>
+      <option value="">Todos los vendedores</option>
+      {sellers.map((name) => <option key={name} value={name}>{displaySeller(name)}</option>)}
+    </Select>
+  );
+  const teamSelect = (id?: string, className?: string) => (
+    <Select id={id} value={team} onChange={(event) => setTeam(event.target.value)} aria-label={id ? undefined : "Equipo"} className={className}>
+      <option value="">Todos los equipos</option>
+      {teams.map((name) => <option key={name} value={name}>{name}</option>)}
+    </Select>
+  );
+  const activeChip = <Chip active={activeOnly} onClick={() => setActiveOnly((value) => !value)}>Solo activas</Chip>;
+  const overdueChip = (
+    <Chip active={overdueOnly} alert={!overdueOnly && stats.overdue > 0} count={stats.overdue} onClick={() => setOverdueOnly((value) => !value)}>
+      Solo con actividad vencida
+    </Chip>
+  );
 
   return (
     <div className="page page-wide">
@@ -172,18 +202,13 @@ export function PipelineBoard({ initial, today }: { initial: LeadRecord[]; today
           />
         }
       >
-        <Toolbar>
+        {/* Escritorio: todos los filtros en una fila. */}
+        <Toolbar className="max-sm:hidden">
           <SearchInput value={q} onChange={setQ} placeholder="Buscar cliente, oportunidad o vendedor" className="w-full sm:w-80" aria-label="Buscar oportunidades" />
-          <Select value={seller} onChange={(event) => setSeller(event.target.value)} aria-label="Vendedor" className="w-full sm:w-52">
-            <option value="">Todos los vendedores</option>
-            {sellers.map((name) => <option key={name} value={name}>{displaySeller(name)}</option>)}
-          </Select>
-          <Select value={team} onChange={(event) => setTeam(event.target.value)} aria-label="Equipo" className="w-full sm:w-44">
-            <option value="">Todos los equipos</option>
-            {teams.map((name) => <option key={name} value={name}>{name}</option>)}
-          </Select>
-          <Chip active={activeOnly} onClick={() => setActiveOnly((value) => !value)}>Solo activas</Chip>
-          <Chip active={overdueOnly} alert={!overdueOnly && stats.overdue > 0} count={stats.overdue} onClick={() => setOverdueOnly((value) => !value)}>Solo con actividad vencida</Chip>
+          {sellerSelect(undefined, "w-full sm:w-52")}
+          {teamSelect(undefined, "w-full sm:w-44")}
+          {activeChip}
+          {overdueChip}
           {bucket !== "all" && (
             <Chip active onClick={() => setBucket("all")} aria-label={`Quitar filtro ${GROUP_META[bucket].plural}`}>
               Solo {GROUP_META[bucket].plural.toLowerCase()} <X className="size-3" aria-hidden />
@@ -194,13 +219,72 @@ export function PipelineBoard({ initial, today }: { initial: LeadRecord[]; today
           )}
           <span className="num ml-auto text-xs text-ink-3">{visible.length} de {leads.length} oportunidades</span>
         </Toolbar>
+
+        {/* Celular: buscador + botón "Filtros · N"; debajo, los filtros activos como chips con su "×". */}
+        <div className="space-y-2 sm:hidden">
+          <div className="flex items-center gap-2">
+            <SearchInput value={q} onChange={setQ} placeholder="Buscar oportunidad" className="min-w-0 flex-1" aria-label="Buscar oportunidades" />
+            <Button variant="secondary" onClick={() => setFiltersOpen(true)} aria-haspopup="dialog" aria-expanded={filtersOpen} className={cn(dialogFilters > 0 && "border-navy text-navy")}>
+              <SlidersHorizontal />
+              Filtros{dialogFilters > 0 ? ` · ${dialogFilters}` : ""}
+            </Button>
+          </div>
+          <div className="flex flex-wrap items-center gap-1.5">
+            {seller && (
+              <Chip active onClick={() => setSeller("")} aria-label={`Quitar filtro de vendedor ${displaySeller(seller)}`}>
+                {displaySeller(seller)} <X className="size-3" aria-hidden />
+              </Chip>
+            )}
+            {team && (
+              <Chip active onClick={() => setTeam("")} aria-label={`Quitar filtro de equipo ${team}`}>
+                {team} <X className="size-3" aria-hidden />
+              </Chip>
+            )}
+            {activeOnly && (
+              <Chip active onClick={() => setActiveOnly(false)} aria-label="Quitar filtro Solo activas">
+                Solo activas <X className="size-3" aria-hidden />
+              </Chip>
+            )}
+            {overdueOnly && (
+              <Chip active onClick={() => setOverdueOnly(false)} aria-label="Quitar filtro Solo con actividad vencida">
+                Actividad vencida <X className="size-3" aria-hidden />
+              </Chip>
+            )}
+            {bucket !== "all" && (
+              <Chip active onClick={() => setBucket("all")} aria-label={`Quitar filtro ${GROUP_META[bucket].plural}`}>
+                Solo {GROUP_META[bucket].plural.toLowerCase()} <X className="size-3" aria-hidden />
+              </Chip>
+            )}
+            {hasFilters && (
+              <Button variant="ghost" size="sm" onClick={clearFilters}><X />Limpiar</Button>
+            )}
+            <span className="num ml-auto text-xs text-ink-3">{visible.length} de {leads.length} oportunidades</span>
+          </div>
+        </div>
       </PageHeader>
 
-      <StatGrid cols={6} className="mb-5">
-        <StatButton label="Abiertas" value={stats.open} hint="etapas 1 a 6" active={bucket === "open" && !overdueOnly} onClick={() => toggleBucket("open")} />
-        <StatButton label="Ingreso esperado abierto" value={compactCop(stats.openRevenue)} hint={`${cop(stats.openRevenue)} · suma de las abiertas`} active={bucket === "open" && !overdueOnly} onClick={() => toggleBucket("open")} />
-        <StatButton label="Pronóstico ponderado" value={compactCop(stats.weighted)} hint={`${cop(stats.weighted)} · ingreso × probabilidad`} tone="info" active={bucket === "open" && !overdueOnly} onClick={() => toggleBucket("open")} />
+      {/* Resumen clicable. En el celular quedan 4 (2 × 2); Ganadas y Perdidas pasan a chips debajo. */}
+      <StatGrid cols={6} className="mb-5 max-sm:mb-3">
+        <StatButton className="max-sm:order-1" label="Abiertas" value={stats.open} hint="etapas 1 a 6" active={openActive} onClick={() => toggleBucket("open")} />
         <StatButton
+          className="max-sm:order-3"
+          label={<><span className="sm:hidden">Ingreso esperado</span><span className="max-sm:hidden">Ingreso esperado abierto</span></>}
+          value={compactCop(stats.openRevenue)}
+          hint={<><span className="num">{cop(stats.openRevenue)}</span><span className="max-sm:hidden"> · suma de las abiertas</span></>}
+          active={openActive}
+          onClick={() => toggleBucket("open")}
+        />
+        <StatButton
+          className="max-sm:order-4"
+          label={<><span className="sm:hidden">Ponderado</span><span className="max-sm:hidden">Pronóstico ponderado</span></>}
+          value={compactCop(stats.weighted)}
+          hint={<><span className="num">{cop(stats.weighted)}</span><span className="max-sm:hidden"> · ingreso × probabilidad</span></>}
+          tone="info"
+          active={openActive}
+          onClick={() => toggleBucket("open")}
+        />
+        <StatButton
+          className="max-sm:order-2"
           label="Con actividad vencida"
           value={stats.overdue}
           hint="abiertas con actividad atrasada"
@@ -212,9 +296,17 @@ export function PipelineBoard({ initial, today }: { initial: LeadRecord[]; today
             setBucket(on ? "all" : "open");
           }}
         />
-        <StatButton label="Ganadas" value={stats.won} hint="Cierre / ganado" tone="ok" active={bucket === "won"} onClick={() => toggleBucket("won")} />
-        <StatButton label="Perdidas" value={stats.lost} hint="Oportunidad perdida" tone={stats.lost > 0 ? "danger" : "neutral"} active={bucket === "lost"} onClick={() => toggleBucket("lost")} />
+        <StatButton className="max-sm:hidden" label="Ganadas" value={stats.won} hint="Cierre / ganado" tone="ok" active={bucket === "won"} onClick={() => toggleBucket("won")} />
+        <StatButton className="max-sm:hidden" label="Perdidas" value={stats.lost} hint="Oportunidad perdida" tone={stats.lost > 0 ? "danger" : "neutral"} active={bucket === "lost"} onClick={() => toggleBucket("lost")} />
       </StatGrid>
+      <div className="mb-4 flex items-center gap-2 overflow-x-auto sm:hidden" aria-label="Oportunidades cerradas">
+        <Chip active={bucket === "won"} count={stats.won} onClick={() => toggleBucket("won")}>
+          <span className="size-1.5 rounded-full bg-ok" aria-hidden />Ganadas
+        </Chip>
+        <Chip active={bucket === "lost"} count={stats.lost} onClick={() => toggleBucket("lost")}>
+          <span className="size-1.5 rounded-full bg-danger" aria-hidden />Perdidas
+        </Chip>
+      </div>
 
       {view === "board" ? (
         <Kanban leads={boardLeads} today={today} focus={bucket} onMove={(key, stage) => void move(key, stage)} onOpen={setLeadParam} />
@@ -223,6 +315,27 @@ export function PipelineBoard({ initial, today }: { initial: LeadRecord[]; today
       )}
 
       <LeadSheet lead={selected} open={!!selected} onOpenChange={(open) => !open && setLeadParam(null)} today={today} saving={savingKey === selected?.import_key} onMove={move} />
+
+      {/* Filtros del celular (hoja inferior). En escritorio los mismos controles están en la Toolbar. */}
+      <Dialog open={filtersOpen} onOpenChange={setFiltersOpen}>
+        <DialogContent size="sm" title="Filtros" description="Acotan el tablero, la lista y el resumen de arriba.">
+          <DialogBody className="space-y-4">
+            <Field label="Vendedor" htmlFor="pipeline-filter-seller">{sellerSelect("pipeline-filter-seller")}</Field>
+            <Field label="Equipo" htmlFor="pipeline-filter-team">{teamSelect("pipeline-filter-team")}</Field>
+            <div className="space-y-1.5">
+              <p className="text-xs font-medium text-ink-2">Mostrar</p>
+              <div className="flex flex-wrap gap-2">
+                {activeChip}
+                {overdueChip}
+              </div>
+            </div>
+          </DialogBody>
+          <DialogFooter>
+            <Button variant="secondary" onClick={clearDialogFilters} disabled={dialogFilters === 0}>Limpiar</Button>
+            <Button onClick={() => setFiltersOpen(false)}>Ver {visible.length} {visible.length === 1 ? "oportunidad" : "oportunidades"}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -231,6 +344,7 @@ export function PipelineBoard({ initial, today }: { initial: LeadRecord[]; today
 function StatButton({
   active,
   onClick,
+  className,
   ...stat
 }: React.ComponentProps<typeof Stat> & { active: boolean; onClick: () => void }) {
   return (
@@ -248,9 +362,10 @@ function StatButton({
       className={cn(
         "cursor-pointer rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-navy-2/40 [&>div]:transition-colors [&>div]:hover:border-line [&>div]:hover:bg-surface-2",
         active && "[&>div]:border-navy [&>div]:bg-accent-soft [&>div]:hover:bg-accent-soft",
+        className,
       )}
     >
-      <Stat {...stat} />
+      <Stat {...stat} className="h-full" />
     </div>
   );
 }

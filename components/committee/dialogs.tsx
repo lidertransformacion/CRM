@@ -62,7 +62,8 @@ export function EmailDialog({ open, onOpenChange, doc, asOf }: { open: boolean; 
             </div>
           </Field>
           <Field label="Cuerpo del correo" hint="Vista previa de lo que se copia. Las filas en rojo son pendientes con 2 o más comités.">
-            <div className="email-preview max-h-[48vh] overflow-auto rounded-lg border border-line bg-surface p-4" dangerouslySetInnerHTML={{ __html: email.html }} />
+            {/* En móvil no hay desplazamiento anidado: la hoja completa desplaza y el pie con "Copiar" queda fijo abajo. */}
+            <div className="email-preview max-h-[48vh] overflow-auto rounded-lg border border-line bg-surface p-4 max-sm:max-h-none max-sm:p-3" dangerouslySetInnerHTML={{ __html: email.html }} />
           </Field>
         </DialogBody>
         <DialogFooter>
@@ -191,14 +192,14 @@ export function LeadLinkDialog({
               <Badge tone="info"><Link2 className="size-3" /> Vinculado</Badge> Al elegir otra, se reemplaza el vínculo.
             </p>
           )}
-          <div className="max-h-72 space-y-1 overflow-auto" role="listbox" aria-label="Resultados">
+          <div className="max-h-72 space-y-1 overflow-auto max-sm:max-h-none" role="listbox" aria-label="Resultados">
             {rows.map((row) => (
               <button
                 key={row.import_key}
                 type="button"
                 role="option"
                 aria-selected={row.import_key === current}
-                className="block w-full rounded-md px-3 py-2 text-left text-sm transition-colors hover:bg-accent-soft focus-visible:bg-accent-soft"
+                className="block w-full rounded-md px-3 py-2 text-left text-sm transition-colors hover:bg-accent-soft focus-visible:bg-accent-soft max-sm:py-3"
                 onClick={() => onPick(row.import_key)}
               >
                 <span className="block font-medium text-ink">{row.customer || row.name}</span>

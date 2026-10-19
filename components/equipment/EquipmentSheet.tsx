@@ -153,7 +153,7 @@ export function EquipmentSheet({
                 <span>
                   Código de tienda <strong className="num">{previewCode}</strong>
                 </span>
-                <span className="text-ink-3">·</span>
+                <span className="text-ink-3 max-sm:hidden">·</span>
                 <span>
                   Activo <strong className="num">{row?.asset_number ?? "ACT-…"}</strong>
                 </span>

@@ -12,7 +12,7 @@ import { cn, shortDate } from "@/lib/utils";
 /** Pendientes del comité actual que ya vencieron o llevan 2 o más comités. Cada fila filtra Comités por responsable. */
 export function PendientesCard({ rows, total, committeeNumber }: { rows: PendienteAlert[]; total: number; committeeNumber: number }) {
   return (
-    <Card>
+    <Card className="min-w-0">
       <CardHeader
         title="Pendientes vencidos y arrastrados"
         description={`Del comité ${committeeNumber}: ya pasaron su fecha o llevan 2 o más comités sin cerrarse`}
@@ -56,10 +56,11 @@ function CarryBadge({ row }: { row: PendienteAlert }) {
   );
 }
 
+/** Fecha de vencimiento: columna fija alineada a la derecha en escritorio; texto corrido en móvil. */
 function DueLabel({ row }: { row: PendienteAlert }) {
-  if (!row.dueOn) return <span className="w-[88px] text-right text-xs text-ink-3">Sin fecha</span>;
+  if (!row.dueOn) return <span className="text-xs text-ink-3 sm:w-[88px] sm:text-right">Sin fecha</span>;
   return (
-    <span className={cn("num w-[88px] text-right text-xs", row.overdue ? "font-medium text-danger" : "text-ink-3")}>
+    <span className={cn("num text-xs sm:w-[88px] sm:text-right", row.overdue ? "font-medium text-danger" : "text-ink-3")}>
       {row.overdue ? "Venció" : "Vence"} {shortDate(row.dueOn)}
     </span>
   );

@@ -18,7 +18,7 @@ const FORM_ID = "maintenance-form";
 type Draft = { performedOn: string; kind: "preventivo" | "correctivo"; hours: string; partsCost: string; technician: string; conditionAfter: string; notes: string };
 
 /** Botón "Registrar mantenimiento" con su diálogo. Al guardar refresca la hoja de vida. */
-export function MaintenanceDialog({ serial, today, rate, variant = "primary" }: { serial: string; today: string; rate: number; variant?: "primary" | "secondary" }) {
+export function MaintenanceDialog({ serial, today, rate, variant = "primary", className }: { serial: string; today: string; rate: number; variant?: "primary" | "secondary"; className?: string }) {
   const router = useRouter();
   const { toast } = useToast();
   const [open, setOpen] = React.useState(false);
@@ -70,7 +70,7 @@ export function MaintenanceDialog({ serial, today, rate, variant = "primary" }: 
 
   return (
     <>
-      <Button variant={variant} onClick={() => setOpen(true)}>
+      <Button variant={variant} onClick={() => setOpen(true)} className={className}>
         <Wrench /> Registrar mantenimiento
       </Button>
       <Dialog open={open} onOpenChange={setOpen}>

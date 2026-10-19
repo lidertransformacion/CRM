@@ -100,8 +100,27 @@ export function SheetDiffDialog({ open, onOpenChange }: { open: boolean; onOpenC
                 <EmptyState compact icon={<FileSpreadsheet />} title="Sin diferencias" description="La hoja y el CRM dicen lo mismo. Al editar un equipo aquí, aparecerá qué celda cambiaría." />
               ) : (
                 <>
+                  {/* Móvil: cada celda que cambiaría como fila (serial · columna · de → a). */}
                   {changes.length > 0 && (
-                    <TableWrap className="shadow-none">
+                    <ul className="divide-y divide-line-2 rounded-xl border border-line-2 sm:hidden">
+                      {changes.map((change, index) => (
+                        <li key={`${change.serial}-${change.column}-${index}`} className="px-3.5 py-2.5 text-sm">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="num font-medium text-ink">{change.serial}</span>
+                            <span className="num text-xs text-ink-3">fila {change.rowNumber}</span>
+                          </div>
+                          <p className="text-xs text-ink-2">{change.column}</p>
+                          <p className="mt-1 break-words text-xs">
+                            <span className="text-ink-3">{change.from || <span className="italic">vacío</span>}</span>
+                            <span className="mx-1.5 text-ink-3">→</span>
+                            <span className="font-medium text-ink">{change.to || <span className="italic font-normal text-ink-3">vacío</span>}</span>
+                          </p>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  {changes.length > 0 && (
+                    <TableWrap className="shadow-none max-sm:hidden">
                       <Table className="min-w-[640px]">
                         <THead>
                           <tr>

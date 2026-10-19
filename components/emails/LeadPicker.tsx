@@ -129,11 +129,16 @@ function LeadSearch({ onChoose, onGeneric, current, onKeep }: { onChoose: (lead:
         />
         {loading && <LoaderCircle className="pointer-events-none absolute right-9 top-1/2 size-4 -translate-y-1/2 animate-spin text-ink-3" aria-hidden />}
         {open && term && (
-          <div id={listId} role="listbox" className="absolute left-0 right-0 top-full z-20 mt-1 max-h-72 overflow-auto rounded-lg border border-line-2 bg-surface p-1 shadow-pop">
+          <div
+            id={listId}
+            role="listbox"
+            // Móvil: lista en el flujo, a ancho completo y sin recorte. Escritorio: desplegable flotante bajo el buscador.
+            className="z-20 rounded-lg border border-line-2 bg-surface p-1 shadow-pop max-sm:mt-2 sm:absolute sm:left-0 sm:right-0 sm:top-full sm:mt-1 sm:max-h-72 sm:overflow-auto"
+          >
             {failed ? (
-              <p className="px-3 py-2 text-xs text-danger">No se pudo buscar. Revisa que el servidor esté corriendo e inténtalo de nuevo.</p>
+              <p className="px-3 py-2.5 text-xs text-danger">No se pudo buscar. Revisa que el servidor esté corriendo e inténtalo de nuevo.</p>
             ) : results.length === 0 ? (
-              <p className="px-3 py-2 text-xs text-ink-3">{loading ? "Buscando…" : `Sin resultados para «${term}». Prueba con parte del nombre del cliente.`}</p>
+              <p className="px-3 py-2.5 text-xs text-ink-3">{loading ? "Buscando…" : `Sin resultados para «${term}». Prueba con parte del nombre del cliente.`}</p>
             ) : (
               results.map((item, index) => (
                 <button
@@ -143,7 +148,7 @@ function LeadSearch({ onChoose, onGeneric, current, onKeep }: { onChoose: (lead:
                   aria-selected={index === activeIndex}
                   onMouseEnter={() => setActiveIndex(index)}
                   onClick={() => choose(item)}
-                  className={cn("flex w-full flex-col items-start gap-0.5 rounded-md px-3 py-2 text-left transition-colors", index === activeIndex ? "bg-accent-soft" : "hover:bg-surface-2")}
+                  className={cn("flex min-h-11 w-full flex-col items-start justify-center gap-0.5 rounded-md px-3 py-2 text-left transition-colors", index === activeIndex ? "bg-accent-soft" : "hover:bg-surface-2")}
                 >
                   <span className="w-full truncate text-sm font-medium text-ink">{item.customer || item.name}</span>
                   <span className="w-full truncate text-xs text-ink-3">
@@ -156,9 +161,9 @@ function LeadSearch({ onChoose, onGeneric, current, onKeep }: { onChoose: (lead:
           </div>
         )}
       </div>
-      <div className="flex flex-wrap items-center gap-2 text-xs text-ink-3">
+      <div className="flex items-center gap-2 text-xs text-ink-3">
         <span>o</span>
-        <Button variant="secondary" size="sm" onClick={onGeneric}>
+        <Button variant="secondary" size="sm" onClick={onGeneric} className="max-sm:h-11 max-sm:flex-1 max-sm:text-sm">
           <FileText /> Sin oportunidad (texto genérico)
         </Button>
       </div>
@@ -181,7 +186,7 @@ function ChosenLead({ lead, onChange }: { lead: LeadSummary; onChange: () => voi
           <p className="mt-0.5 truncate text-sm font-semibold text-ink">{lead.customer || "Sin cliente"}</p>
           <p className="truncate text-xs text-ink-2">{lead.name}</p>
         </div>
-        <Button variant="secondary" size="sm" onClick={onChange} className="shrink-0">Cambiar</Button>
+        <Button variant="secondary" size="sm" onClick={onChange} className="shrink-0 max-sm:h-10">Cambiar</Button>
       </div>
       <dl className="mt-3 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 text-xs">
         <dt className="text-ink-3">Vendedor</dt>
@@ -206,7 +211,7 @@ function GenericLead({ onChange }: { onChange: () => void }) {
         <p className="mt-0.5 text-sm font-semibold text-ink">Texto genérico</p>
         <p className="text-xs text-ink-2">Cliente, oportunidad e ingreso quedan como texto genérico; cámbialos en el borrador antes de enviar.</p>
       </div>
-      <Button variant="secondary" size="sm" onClick={onChange} className="shrink-0">Cambiar</Button>
+      <Button variant="secondary" size="sm" onClick={onChange} className="shrink-0 max-sm:h-10">Cambiar</Button>
     </div>
   );
 }

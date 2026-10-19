@@ -19,7 +19,8 @@ export function TemplatePicker({ templates, value, onChange }: { templates: Emai
             aria-checked={active}
             onClick={() => onChange(template.id)}
             className={cn(
-              "flex w-full items-start gap-3 rounded-lg border px-3.5 py-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-navy-2/40",
+              // Tarjeta compacta (nombre + asunto de ejemplo en una línea) y de al menos 44 px para el pulgar.
+              "flex min-h-11 w-full items-start gap-3 rounded-lg border px-3.5 py-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-navy-2/40 max-sm:py-2.5",
               active ? "border-navy bg-accent-soft/50 ring-1 ring-navy" : "border-line-2 bg-surface hover:border-line hover:bg-surface-2",
             )}
           >

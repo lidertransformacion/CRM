@@ -46,7 +46,10 @@ function MiniStat({ label, value, tone, small = false }: { label: string; value:
   );
 }
 
-/** Barras horizontales con escala relativa al máximo de ese vendedor. */
+/**
+ * Barras horizontales con escala relativa al máximo de ese vendedor.
+ * En escritorio la etiqueta va a la izquierda de la barra; en móvil, arriba con el promedio a la derecha y la barra a ancho completo.
+ */
 function StageAging({ stages }: { stages: StageAge[] }) {
   const max = stages.reduce((acc, stage) => Math.max(acc, stage.avgDays), 0);
   return (
@@ -59,13 +62,19 @@ function StageAging({ stages }: { stages: StageAge[] }) {
           </button>
         </Tooltip>
       </div>
-      <ul className="space-y-2.5">
+      <ul className="space-y-3 sm:space-y-2.5">
         {stages.map((stage) => {
           const tone = stage.avgDays > DANGER_DAYS ? "danger" : stage.avgDays > WARN_DAYS ? "warn" : null;
           const width = max > 0 && stage.count > 0 ? Math.max(2, Math.round((stage.avgDays / max) * 100)) : 0;
+          const plural = stage.count === 1 ? "oportunidad" : "oportunidades";
           return (
-            <li key={stage.stage} className="grid grid-cols-[88px_minmax(0,1fr)] items-center gap-x-3 gap-y-1 sm:grid-cols-[96px_minmax(0,1fr)]">
-              <span className="truncate text-xs font-medium text-ink-2" title={stage.stage}>{stage.short}</span>
+            <li key={stage.stage} className="grid grid-cols-1 gap-y-1 sm:grid-cols-[96px_minmax(0,1fr)] sm:items-center sm:gap-x-3">
+              <div className="flex items-baseline justify-between gap-2 sm:block">
+                <span className="block min-w-0 truncate text-xs font-medium text-ink-2" title={stage.stage}>{stage.short}</span>
+                <span className={cn("num shrink-0 text-xs sm:hidden", tone === "danger" ? "text-danger" : tone === "warn" ? "text-hl-ink" : "text-ink-2")}>
+                  {stage.count ? `${stage.avgDays} días promedio` : "—"}
+                </span>
+              </div>
               <div className="min-w-0">
                 <div className="h-2 w-full overflow-hidden rounded-full bg-accent-soft">
                   <div
@@ -79,9 +88,14 @@ function StageAging({ stages }: { stages: StageAge[] }) {
                   {stage.count === 0 ? (
                     <span>Sin oportunidades abiertas</span>
                   ) : (
-                    <span className="num">
-                      {stage.count} {stage.count === 1 ? "oportunidad" : "oportunidades"} · {stage.avgDays} días promedio · máx {stage.maxDays}
-                    </span>
+                    <>
+                      <span className="num max-sm:hidden">
+                        {stage.count} {plural} · {stage.avgDays} días promedio · máx {stage.maxDays}
+                      </span>
+                      <span className="num sm:hidden">
+                        {stage.count} {plural} · máx {stage.maxDays} días
+                      </span>
+                    </>
                   )}
                   {tone === "danger" && <Badge tone="danger" size="sm">Más de {DANGER_DAYS} días</Badge>}
                   {tone === "warn" && <Badge tone="warn" size="sm">Más de {WARN_DAYS} días</Badge>}

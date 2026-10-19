@@ -71,7 +71,15 @@ export function LeadSheet({
         actions={<Badge tone={GROUP_META[group].badge}>{stageShort(lead.stage)}</Badge>}
       >
         <SheetBody className="space-y-6">
-          <Field label="Etapa" htmlFor="lead-stage" hint="Se guarda en este CRM, no en Odoo. Arrastrar la tarjeta en el tablero hace lo mismo.">
+          <Field
+            label="Etapa"
+            htmlFor="lead-stage"
+            hint={
+              <>
+                Se guarda en este CRM, no en Odoo.<span className="max-sm:hidden"> Arrastrar la tarjeta en el tablero hace lo mismo.</span>
+              </>
+            }
+          >
             <Select id="lead-stage" value={lead.stage} disabled={saving} onChange={(event) => void onMove(lead.import_key, event.target.value)}>
               <optgroup label="En curso">
                 {STAGES.filter((stage) => stageGroup(stage.name) === "open").map((stage) => (
@@ -87,7 +95,8 @@ export function LeadSheet({
           </Field>
 
           <FieldSection title="Datos de la oportunidad">
-            <dl className="grid grid-cols-1 gap-x-4 gap-y-3 sm:grid-cols-2">
+            {/* Dos columnas también en el celular: los datos cortos caben y los largos ocupan toda la fila. */}
+            <dl className="grid grid-cols-2 gap-x-4 gap-y-3">
               <Item label="Vendedor" value={displaySeller(lead.salesperson)} />
               <Item label="Equipo" value={lead.team || "—"} />
               <Item label="Ingreso esperado" value={<span className="num">{lead.expected_revenue ? cop(lead.expected_revenue) : "—"}</span>} />
@@ -107,6 +116,7 @@ export function LeadSheet({
               {lead.closed_at && <Item label="Cerrada el" value={fullDate(lead.closed_at)} />}
               <Item
                 label="Próxima actividad"
+                wide
                 value={
                   lead.next_activity_deadline ? (
                     <span className="flex flex-wrap items-center gap-1.5">
@@ -123,10 +133,11 @@ export function LeadSheet({
                 label="Resultado en Odoo"
                 value={<Badge size="sm" tone={lead.won_status === "Ganado" ? "ok" : lead.won_status === "Perdido" ? "danger" : "neutral"}>{lead.won_status || "Pendiente"}</Badge>}
               />
-              {lead.loss_reason && <Item label="Motivo de pérdida" value={lead.loss_reason} />}
+              {lead.loss_reason && <Item label="Motivo de pérdida" wide value={lead.loss_reason} />}
               {tags.length > 0 && (
                 <Item
                   label="Etiquetas"
+                  wide
                   value={
                     <span className="flex flex-wrap gap-1">
                       {tags.map((tag) => <Badge key={tag} tone="outline" size="sm">{tag}</Badge>)}
@@ -134,7 +145,7 @@ export function LeadSheet({
                   }
                 />
               )}
-              {!!lead.edited_locally && <Item label="Origen del dato" value={<Badge tone="warn" size="sm">Cambiada aquí · distinta de Odoo</Badge>} />}
+              {!!lead.edited_locally && <Item label="Origen del dato" wide value={<Badge tone="warn" size="sm">Cambiada aquí · distinta de Odoo</Badge>} />}
             </dl>
           </FieldSection>
 
@@ -156,14 +167,15 @@ export function LeadSheet({
           </FieldSection>
         </SheetBody>
         <SheetFooter>
+          {/* Los enlaces (asChild) no son <button>, así que el reparto del ancho en móvil va explícito. */}
           {lead.customer ? (
-            <Button variant="secondary" asChild>
+            <Button variant="secondary" asChild className="max-sm:flex-1">
               <Link href={`/clientes?cliente=${encodeURIComponent(lead.customer)}`}><Users />Ver cliente</Link>
             </Button>
           ) : (
             <Button variant="secondary" disabled title="Esta oportunidad no tiene cliente en el export"><Users />Ver cliente</Button>
           )}
-          <Button asChild>
+          <Button asChild className="max-sm:flex-1">
             <Link href={`/correos?lead=${encodeURIComponent(lead.import_key)}`}><Mail />Redactar correo</Link>
           </Button>
         </SheetFooter>
@@ -172,11 +184,12 @@ export function LeadSheet({
   );
 }
 
-function Item({ label, value }: { label: string; value: React.ReactNode }) {
+/** Dato de la ficha. `wide` lo extiende a las dos columnas en el celular (texto largo, listas de etiquetas). */
+function Item({ label, value, wide = false }: { label: string; value: React.ReactNode; wide?: boolean }) {
   return (
-    <div className="min-w-0">
+    <div className={cn("min-w-0", wide && "max-sm:col-span-2")}>
       <dt className="text-xs font-medium text-ink-3">{label}</dt>
-      <dd className="mt-0.5 text-sm text-ink">{value}</dd>
+      <dd className="mt-0.5 break-words text-sm text-ink">{value}</dd>
     </div>
   );
 }

@@ -71,7 +71,7 @@ export function SettingsDialog({
               <Field label="COP por hora" className="w-full sm:w-56" error={!rateValid ? "Escribe un número mayor o igual a cero" : undefined}>
                 <Input type="number" min={0} step={1000} inputMode="numeric" value={draft} onChange={(event) => setDraft(event.target.value)} aria-invalid={!rateValid} />
               </Field>
-              <Button onClick={() => void saveRate()} loading={saving} disabled={!rateChanged} className="mb-[1px]">
+              <Button onClick={() => void saveRate()} loading={saving} disabled={!rateChanged} className="mb-[1px] max-sm:w-full">
                 Guardar tarifa
               </Button>
             </div>

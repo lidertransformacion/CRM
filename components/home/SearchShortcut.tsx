@@ -6,8 +6,8 @@ import { Button } from "@/components/ui/button";
 import { Kbd } from "@/components/ui/kbd";
 import { useCommandPalette } from "@/components/shell/command-palette-context";
 
-/** Botón "Buscar" de Inicio: abre el buscador global del AppShell (⌘K / Ctrl K). */
-export function SearchShortcut() {
+/** Botón "Buscar" de Inicio: abre el buscador global del AppShell. El atajo (⌘K / Ctrl K) solo se muestra en escritorio. */
+export function SearchShortcut({ className }: { className?: string }) {
   const { open } = useCommandPalette();
   const [mac, setMac] = React.useState(true);
   React.useEffect(() => {
@@ -15,7 +15,7 @@ export function SearchShortcut() {
   }, []);
 
   return (
-    <Button type="button" variant="secondary" onClick={open} aria-label="Buscar cliente, equipo u oportunidad" aria-keyshortcuts="Meta+K Control+K">
+    <Button type="button" variant="secondary" onClick={open} className={className} aria-label="Buscar cliente, equipo u oportunidad" aria-keyshortcuts="Meta+K Control+K">
       <Search />
       Buscar
       <span className="hidden items-center gap-0.5 sm:inline-flex" aria-hidden>

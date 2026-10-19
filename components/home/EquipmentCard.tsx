@@ -49,7 +49,7 @@ export function EquipmentCard({ summary }: { summary: EquipmentSummary }) {
     .filter(Boolean)
     .join(" · ");
   return (
-    <Card>
+    <Card className="min-w-0">
       <CardHeader title="Equipos a revisar" description={description} actions={<SeeAll href="/comodatos" count={summary.total} />} />
       {summary.rows.length === 0 ? (
         <EmptyState compact icon={<CircleCheck />} title="Equipos al día" description="Ninguna garantía vencida ni mantenimiento pendiente." />

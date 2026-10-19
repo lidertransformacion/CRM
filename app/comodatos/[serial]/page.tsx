@@ -8,7 +8,7 @@ import { costFor, equipmentHistory, getEquipment, hourlyRate, maintenanceLogs } 
 import { siteById, statusLabel } from "@/lib/equipment/catalog";
 import { nextMaintenanceFor } from "@/lib/equipment/queries";
 import type { WarrantyState } from "@/lib/equipment/warranty";
-import { cop, displaySeller, todayIso } from "@/lib/utils";
+import { cn, cop, displaySeller, todayIso } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
@@ -59,16 +59,16 @@ export default async function LifeSheet({ params }: { params: Promise<{ serial: 
         description={`Serial ${equipment.serial} · ${equipment.category}`}
         actions={
           <>
-            <Link href="/comodatos" className={buttonVariants({ variant: "secondary" })}>
-              <ArrowLeft /> Volver a equipos
-            </Link>
-            <Link href={editHref} className={buttonVariants({ variant: "secondary" })}>
-              <Pencil /> Editar equipo
-            </Link>
+              <Link href="/comodatos" className={cn(buttonVariants({ variant: "secondary" }), "max-sm:flex-1")}>
+                <ArrowLeft /> Volver a equipos
+              </Link>
+              <Link href={editHref} className={cn(buttonVariants({ variant: "secondary" }), "max-sm:flex-1")}>
+                <Pencil /> Editar equipo
+              </Link>
           </>
         }
       >
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2 max-sm:-mx-4 max-sm:flex-nowrap max-sm:overflow-x-auto max-sm:px-4 max-sm:[scrollbar-width:none] max-sm:[&>*]:shrink-0">
           <Badge tone={STATUS_TONE[equipment.status] ?? "neutral"} dot>
             {statusLabel(equipment.status)}
           </Badge>
@@ -81,7 +81,7 @@ export default async function LifeSheet({ params }: { params: Promise<{ serial: 
         <Card>
           <CardHeader title="Datos del equipo" description="Lo que figura en la hoja de Google más lo registrado aquí." />
           <CardBody>
-            <dl className="grid gap-x-6 gap-y-4 sm:grid-cols-2">
+            <dl className="grid gap-x-6 gap-y-4 sm:grid-cols-2 max-sm:gap-y-0 max-sm:divide-y max-sm:divide-line-2 max-sm:[&>div]:py-3 max-sm:[&>div:first-child]:pt-0 max-sm:[&>div:last-child]:pb-0">
               <Info label="Sede" value={siteById(equipment.site_id)?.name ?? equipment.site_id} />
               <Info label="Cliente" value={equipment.client_name || "Sin cliente"} muted={!equipment.client_name} />
               <Info label="Dirección" value={[equipment.address, equipment.city].filter(Boolean).join(", ") || "—"} muted={!equipment.address} />
@@ -94,7 +94,7 @@ export default async function LifeSheet({ params }: { params: Promise<{ serial: 
                 label="Próximo mantenimiento"
                 value={
                   <span className="inline-flex flex-wrap items-center gap-2">
-                    {next && <span className="num">{dateLabel(next, today)}</span>}
+                    {next ? <span className="num">{dateLabel(next, today)}</span> : <span className="text-ink-3">Sin fecha base</span>}
                     {maintenance.tone !== "neutral" && <Badge tone={maintenance.tone}>{maintenance.label}</Badge>}
                   </span>
                 }
@@ -129,41 +129,69 @@ export default async function LifeSheet({ params }: { params: Promise<{ serial: 
         <CardHeader
           title="Mantenimientos"
           description={logs.length ? `${logs.length} ${logs.length === 1 ? "visita registrada" : "visitas registradas"} · costo de visita = horas × tarifa + repuestos` : "Cada visita suma a la hoja de vida y mueve el próximo mantenimiento."}
-          actions={<MaintenanceDialog serial={equipment.serial} today={today} rate={rate} />}
+          actions={<MaintenanceDialog serial={equipment.serial} today={today} rate={rate} className="max-sm:w-full" />}
+          className="max-sm:[&>div:last-child]:w-full"
         />
         {logs.length === 0 ? (
           <EmptyState compact icon={<Wrench />} title="Sin mantenimientos registrados" description="Usa “Registrar mantenimiento” después de cada visita preventiva o correctiva." />
         ) : (
-          <div className="overflow-x-auto">
-            <Table className="min-w-[820px]">
-              <THead>
-                <tr>
-                  <TH>Fecha</TH>
-                  <TH>Tipo</TH>
-                  <TH align="right">Horas</TH>
-                  <TH align="right">Costo</TH>
-                  <TH>Técnico</TH>
-                  <TH>Estado posterior</TH>
-                  <TH>Notas</TH>
-                </tr>
-              </THead>
-              <TBody>
-                {logs.map((log) => (
-                  <TR key={log.id}>
-                    <TD className="num whitespace-nowrap">{dateLabel(log.performed_on, today)}</TD>
-                    <TD>
-                      <Badge tone={MAINTENANCE_KIND_TONE[log.kind] ?? "neutral"}>{log.kind === "preventivo" ? "Preventivo" : log.kind === "correctivo" ? "Correctivo" : log.kind}</Badge>
-                    </TD>
-                    <TD align="right">{log.hours} h</TD>
-                    <TD align="right">{cop(log.visit_cost)}</TD>
-                    <TD className="text-ink-2">{log.technician || "—"}</TD>
-                    <TD>{log.condition_after ? <Badge tone={CONDITION_TONE[log.condition_after] ?? "neutral"}>{log.condition_after}</Badge> : "—"}</TD>
-                    <TD className="max-w-[320px] text-ink-2">{log.notes || "—"}</TD>
-                  </TR>
-                ))}
-              </TBody>
-            </Table>
-          </div>
+          <>
+            {/* Móvil: cada visita como fila (fecha · tipo · horas · costo) con técnico, estado y notas debajo. */}
+            <ul className="divide-y divide-line-2 sm:hidden">
+              {logs.map((log) => (
+                <li key={log.id} className="px-5 py-3 text-sm">
+                  <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                    <span className="num font-medium text-ink">{dateLabel(log.performed_on, today)}</span>
+                    <Badge tone={MAINTENANCE_KIND_TONE[log.kind] ?? "neutral"} size="sm">
+                      {log.kind === "preventivo" ? "Preventivo" : log.kind === "correctivo" ? "Correctivo" : log.kind}
+                    </Badge>
+                    <span className="num ml-auto text-ink-2">
+                      {log.hours} h · {cop(log.visit_cost)}
+                    </span>
+                  </div>
+                  <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-ink-3">
+                    <span>{log.technician || "Sin técnico"}</span>
+                    {log.condition_after && (
+                      <Badge tone={CONDITION_TONE[log.condition_after] ?? "neutral"} size="sm">
+                        {log.condition_after}
+                      </Badge>
+                    )}
+                  </div>
+                  {log.notes && <p className="mt-1 text-xs text-ink-2">{log.notes}</p>}
+                </li>
+              ))}
+            </ul>
+            <div className="overflow-x-auto max-sm:hidden">
+              <Table className="min-w-[820px]">
+                <THead>
+                  <tr>
+                    <TH>Fecha</TH>
+                    <TH>Tipo</TH>
+                    <TH align="right">Horas</TH>
+                    <TH align="right">Costo</TH>
+                    <TH>Técnico</TH>
+                    <TH>Estado posterior</TH>
+                    <TH>Notas</TH>
+                  </tr>
+                </THead>
+                <TBody>
+                  {logs.map((log) => (
+                    <TR key={log.id}>
+                      <TD className="num whitespace-nowrap">{dateLabel(log.performed_on, today)}</TD>
+                      <TD>
+                        <Badge tone={MAINTENANCE_KIND_TONE[log.kind] ?? "neutral"}>{log.kind === "preventivo" ? "Preventivo" : log.kind === "correctivo" ? "Correctivo" : log.kind}</Badge>
+                      </TD>
+                      <TD align="right">{log.hours} h</TD>
+                      <TD align="right">{cop(log.visit_cost)}</TD>
+                      <TD className="text-ink-2">{log.technician || "—"}</TD>
+                      <TD>{log.condition_after ? <Badge tone={CONDITION_TONE[log.condition_after] ?? "neutral"}>{log.condition_after}</Badge> : "—"}</TD>
+                      <TD className="max-w-[320px] text-ink-2">{log.notes || "—"}</TD>
+                    </TR>
+                  ))}
+                </TBody>
+              </Table>
+            </div>
+          </>
         )}
       </Card>
 

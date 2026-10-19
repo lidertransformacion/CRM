@@ -24,10 +24,12 @@ export default async function HomePage() {
         eyebrow="Comercial"
         title="Hoy"
         description={`${weekdayLongDate(data.asOf)}. ${summaryLine(data)}`}
+        // En móvil el bloque de acciones ocupa toda la fila para que los dos accesos se repartan el ancho.
+        className="max-sm:[&>div:first-child>div:last-child]:w-full"
         actions={
           <>
-            <SearchShortcut />
-            <LinkButton href="/comodatos?nuevo=1" variant="secondary">
+            <SearchShortcut className="max-sm:flex-1" />
+            <LinkButton href="/comodatos?nuevo=1" variant="secondary" className="max-sm:flex-1">
               <Plus />
               Nuevo equipo
             </LinkButton>
@@ -37,14 +39,14 @@ export default async function HomePage() {
 
       <AttentionStats data={data} />
 
-      <section className="mt-5 grid gap-4 lg:grid-cols-3" aria-label="Comité en curso">
-        <div className="lg:col-span-2">
+      <section className="mt-5 grid grid-cols-1 gap-4 lg:grid-cols-3" aria-label="Comité en curso">
+        <div className="min-w-0 lg:col-span-2">
           <PendientesCard rows={data.pendientes.rows} total={data.pendientes.total} committeeNumber={data.committee.number} />
         </div>
         <CommitteeCard committee={data.committee} asOf={data.asOf} />
       </section>
 
-      <section className="mt-4 grid gap-4 lg:grid-cols-2" aria-label="Pipeline y equipos">
+      <section className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2" aria-label="Pipeline y equipos">
         <LeadsCard rows={data.leads.rows} total={data.leads.total} />
         <EquipmentCard summary={data.equipment} />
       </section>

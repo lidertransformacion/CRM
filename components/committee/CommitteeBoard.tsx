@@ -3,9 +3,9 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { Download, Ellipsis, FileSpreadsheet, GitCompare, LayoutList, ListChecks, Lock, Mail, Plus, RefreshCw, Users } from "lucide-react";
-import { flatten, matchesPerson, topicIsClosed } from "@/lib/committee/metrics";
+import { flatten, isCarried, isOpen, isOverdue, matchesPerson, topicIsClosed } from "@/lib/committee/metrics";
 import { applyAction } from "@/lib/committee/mutate";
-import type { CommitteeAction, CommitteeDoc } from "@/lib/committee/types";
+import type { CommitteeAction, CommitteeDoc, Topic } from "@/lib/committee/types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -16,13 +16,14 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { PageHeader, Toolbar } from "@/components/ui/page-header";
 import { Segmented } from "@/components/ui/segmented";
 import { Select } from "@/components/ui/select";
+import { Sheet, SheetBody, SheetContent, SheetFooter } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Stat, StatGrid } from "@/components/ui/stat";
 import { SaveIndicator, useToast } from "@/components/ui/toast";
 import { Tooltip } from "@/components/ui/tooltip";
 import { cn, longDate, shortDate, uid } from "@/lib/utils";
 import { AttachLinkDialog, ConfirmDialog, EmailDialog, LeadLinkDialog, NewCommitteeDialog, OriginDialog } from "@/components/committee/dialogs";
-import { PeopleAside } from "@/components/committee/PeopleAside";
+import { PeopleAside, PeopleLegend, PeopleList } from "@/components/committee/PeopleAside";
 import { PersonView } from "@/components/committee/PersonView";
 import { TopicCard } from "@/components/committee/TopicCard";
 import {
@@ -45,6 +46,11 @@ import {
 export type HistoryRow = { number: number; held_on: string; is_current: number; snapshot: boolean };
 
 type Mode = "live" | "snapshot" | "cohort" | "loading";
+
+/** Fila desplazable en móvil, a sangre con el borde de la página (que tiene 16 px de margen) y sin barra visible. */
+const SCROLL_ROW = "max-sm:-mx-4 max-sm:w-[calc(100%+2rem)] max-sm:snap-x max-sm:overflow-x-auto max-sm:px-4 max-sm:[scrollbar-width:none] max-sm:[&::-webkit-scrollbar]:hidden";
+/** Opciones de menú con altura táctil en móvil. */
+const MENU_ITEM = "max-sm:py-2.5";
 
 export function CommitteeBoard({
   initialDoc,
@@ -78,6 +84,8 @@ export function CommitteeBoard({
   const [save, setSave] = useState<SaveState>("saved");
   const [emailOpen, setEmailOpen] = useState(openEmail);
   const [nextOpen, setNextOpen] = useState(false);
+  /** Hoja "Pendientes por persona" (solo cuando el panel lateral no cabe al lado). */
+  const [peopleOpen, setPeopleOpen] = useState(false);
   const [dialog, setDialog] = useState<BoardDialog | null>(null);
   const [freshId, setFreshId] = useState<string | null>(null);
 
@@ -275,11 +283,29 @@ export function CommitteeBoard({
   const narrow = isNarrow(effectiveFilters);
   const nothingVisible = view === "topic" ? visibleOpen.length === 0 && visibleClosed.length === 0 : visibleRows.length === 0;
 
+  /* ── Móvil: los temas sin vencidos ni arrastrados arrancan contraídos ──
+     Solo en el estado por defecto (Abiertos, sin filtro estrecho) y cuando hay más de tres
+     temas; si son pocos, o el usuario está buscando algo concreto, se ven todos abiertos. */
+  const attentionTopics = useMemo(() => {
+    const ids = new Set<string>();
+    for (const row of scopedRows) {
+      if (isOpen(row.pendiente) && (isOverdue(row.pendiente, asOf) || isCarried(shown, row.pendiente))) ids.add(row.topic.id);
+    }
+    return ids;
+  }, [scopedRows, shown, asOf]);
+  const autoCollapseEnabled = !narrow && filters.scope === "open" && visibleOpen.length + visibleClosed.length > 3;
+  const autoCollapse = (topic: Topic) => autoCollapseEnabled && (topicIsClosed(topic) || !attentionTopics.has(topic.id));
+
   /* ── Render ───────────────────────────────────────────────────────────── */
   return (
     <div className="page">
       <PageHeader
-        eyebrow={`${mode === "cohort" ? "Cohorte · " : ""}Comité #${viewing} · ${longDate(heldOn)} · ${shown.committee.area}`}
+        eyebrow={
+          <span className="max-sm:block max-sm:truncate">
+            {mode === "cohort" ? "Cohorte · " : ""}Comité #{viewing} · <span className="sm:hidden">{shortDate(heldOn)}</span>
+            <span className="max-sm:hidden">{longDate(heldOn)}</span> · {shown.committee.area}
+          </span>
+        }
         title={
           <EditableText
             as="span"
@@ -290,10 +316,16 @@ export function CommitteeBoard({
             disabled={readOnly}
           />
         }
-        description="Actas, decisiones y pendientes por responsable. Los cambios se guardan solos."
+        description={
+          <>
+            <span className="max-sm:hidden">Actas, decisiones y pendientes por responsable. Los cambios se guardan solos.</span>
+            <span className="sm:hidden">Pendientes por responsable. Se guarda solo.</span>
+          </>
+        }
         actions={
-          /* El contenedor de acciones de PageHeader no encoge; el tope al ancho del viewport evita desbordar a 390 px. */
-          <div className="flex max-w-[calc(100vw-2rem)] flex-wrap items-center gap-2">
+          /* El contenedor de acciones de PageHeader no encoge; el tope al ancho del viewport evita desbordar a 390 px.
+             En móvil ocupa todo el ancho: indicador de guardado, "Correo resumen" y el menú "⋯" (donde va "Nuevo comité"). */
+          <div className="flex max-w-[calc(100vw-2rem)] flex-wrap items-center gap-2 max-sm:w-[calc(100vw-2rem)]">
             <span className="inline-flex items-center gap-2 sm:mr-1">
               <SaveIndicator state={save} />
               {save === "error" && (
@@ -302,10 +334,10 @@ export function CommitteeBoard({
                 </Button>
               )}
             </span>
-            <Button variant="secondary" onClick={() => setNextOpen(true)} disabled={readOnly}>
+            <Button variant="secondary" onClick={() => setNextOpen(true)} disabled={readOnly} className="max-sm:hidden">
               <Plus /> Nuevo comité
             </Button>
-            <Button onClick={() => setEmailOpen(true)} disabled={mode === "cohort" || mode === "loading"}>
+            <Button onClick={() => setEmailOpen(true)} disabled={mode === "cohort" || mode === "loading"} className="max-sm:min-w-0 max-sm:flex-1">
               <Mail /> Correo resumen
             </Button>
             <DropdownMenu>
@@ -314,19 +346,23 @@ export function CommitteeBoard({
                   <Ellipsis />
                 </Button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent>
-                <DropdownMenuItem asChild>
+              <DropdownMenuContent className="max-sm:min-w-[220px]">
+                <DropdownMenuItem className={cn(MENU_ITEM, "sm:hidden data-[disabled]:opacity-50")} disabled={readOnly} onSelect={() => setNextOpen(true)}>
+                  <Plus /> Nuevo comité
+                </DropdownMenuItem>
+                <DropdownMenuSeparator className="sm:hidden" />
+                <DropdownMenuItem asChild className={MENU_ITEM}>
                   <a href="/api/committee/export?format=csv">
                     <FileSpreadsheet /> Exportar CSV
                   </a>
                 </DropdownMenuItem>
-                <DropdownMenuItem asChild>
+                <DropdownMenuItem asChild className={MENU_ITEM}>
                   <a href="/api/committee/export?format=json">
                     <Download /> Exportar JSON
                   </a>
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
-                <DropdownMenuItem asChild>
+                <DropdownMenuItem asChild className={MENU_ITEM}>
                   <Link href="/comites/comparar">
                     <GitCompare /> Comparar comités
                   </Link>
@@ -337,33 +373,45 @@ export function CommitteeBoard({
         }
       >
         <Toolbar>
-          <Segmented
-            ariaLabel="Qué pendientes ver"
-            value={filters.scope}
-            onChange={(scope) => setFilters((current) => ({ ...current, scope, focus: null }))}
-            options={[
-              { value: "open", label: "Abiertos", count: stats.open },
-              { value: "all", label: "Todos", count: stats.total },
-              { value: "closed", label: "Cerrados", count: stats.closed, tone: "ok" },
-            ]}
-          />
-          <Segmented
-            ariaLabel="Vista"
-            value={view}
-            onChange={setView}
-            options={[
-              { value: "topic", label: <><LayoutList className="size-3.5" aria-hidden /> Por tema</> },
-              { value: "person", label: <><Users className="size-3.5" aria-hidden /> Por persona</> },
-            ]}
-          />
-          <Select aria-label="Comité que estás viendo" value={viewing} onChange={(event) => setViewing(Number(event.target.value))} className="w-full sm:ml-auto sm:w-auto sm:min-w-[240px]">
-            {menu.map((item) => (
-              <option key={item.number} value={item.number}>
-                Comité #{item.number} · {shortDate(item.held_on)} · {item.is_current ? "actual" : item.snapshot ? "acta archivada" : "cohorte"}
-              </option>
-            ))}
-          </Select>
-          <div className="flex w-full flex-wrap items-center gap-1.5" role="group" aria-label="Filtrar por responsable">
+          {/* Móvil: los dos segmentados en una sola fila desplazable, a sangre con el borde de la página. */}
+          <div className={cn("flex items-center gap-2 sm:contents", SCROLL_ROW)}>
+            <Segmented
+              ariaLabel="Qué pendientes ver"
+              value={filters.scope}
+              onChange={(scope) => setFilters((current) => ({ ...current, scope, focus: null }))}
+              className="shrink-0 snap-start"
+              options={[
+                { value: "open", label: "Abiertos", count: stats.open },
+                { value: "all", label: "Todos", count: stats.total },
+                { value: "closed", label: "Cerrados", count: stats.closed, tone: "ok" },
+              ]}
+            />
+            <Segmented
+              ariaLabel="Vista"
+              value={view}
+              onChange={setView}
+              className="shrink-0 snap-start"
+              options={[
+                { value: "topic", label: <><LayoutList className="size-3.5" aria-hidden /> Por tema</> },
+                { value: "person", label: <><Users className="size-3.5" aria-hidden /> Por persona</> },
+              ]}
+            />
+          </div>
+          {/* Selector de comité a ancho completo y, cuando el panel lateral no cabe, el botón "Personas". */}
+          <div className="flex w-full items-center gap-2 sm:contents">
+            <Select aria-label="Comité que estás viendo" value={viewing} onChange={(event) => setViewing(Number(event.target.value))} className="w-full max-sm:min-w-0 max-sm:flex-1 sm:ml-auto sm:w-auto sm:min-w-[240px]">
+              {menu.map((item) => (
+                <option key={item.number} value={item.number}>
+                  Comité #{item.number} · {shortDate(item.held_on)} · {item.is_current ? "actual" : item.snapshot ? "acta archivada" : "cohorte"}
+                </option>
+              ))}
+            </Select>
+            <Button variant="secondary" className="shrink-0 lg:hidden" onClick={() => setPeopleOpen(true)} aria-haspopup="dialog" aria-expanded={peopleOpen}>
+              <Users /> Personas
+              <span className="num rounded-full bg-accent-soft px-1.5 text-[11px] leading-4 text-ink-2">{people.length}</span>
+            </Button>
+          </div>
+          <div className={cn("flex w-full flex-wrap items-center gap-1.5", SCROLL_ROW, "max-sm:flex-nowrap")} role="group" aria-label="Filtrar por responsable">
             <Chip active={!filters.person} onClick={() => setPerson(null)}>Todos</Chip>
             {people.map((item) => {
               const active = filters.person === item.key;
@@ -469,7 +517,7 @@ export function CommitteeBoard({
           ) : (
             <>
               {visibleOpen.map((topic) => (
-                <TopicCard key={topic.id} topic={topic} doc={shown} asOf={asOf} filters={effectiveFilters} readOnly={readOnly} freshId={freshId} onAction={commit} onDialog={setDialog} onShowAll={showAll} />
+                <TopicCard key={topic.id} topic={topic} autoCollapse={autoCollapse(topic)} doc={shown} asOf={asOf} filters={effectiveFilters} readOnly={readOnly} freshId={freshId} onAction={commit} onDialog={setDialog} onShowAll={showAll} />
               ))}
               {visibleClosed.length > 0 && (
                 <section className="space-y-4" aria-label="Temas cerrados">
@@ -477,7 +525,7 @@ export function CommitteeBoard({
                     Temas cerrados <Badge tone="ok" size="sm">{visibleClosed.length}</Badge>
                   </h2>
                   {visibleClosed.map((topic) => (
-                    <TopicCard key={topic.id} topic={topic} doc={shown} asOf={asOf} filters={effectiveFilters} readOnly={readOnly} freshId={freshId} onAction={commit} onDialog={setDialog} onShowAll={showAll} />
+                    <TopicCard key={topic.id} topic={topic} autoCollapse={autoCollapse(topic)} doc={shown} asOf={asOf} filters={effectiveFilters} readOnly={readOnly} freshId={freshId} onAction={commit} onDialog={setDialog} onShowAll={showAll} />
                   ))}
                 </section>
               )}
@@ -500,8 +548,33 @@ export function CommitteeBoard({
           )}
         </div>
 
-        <PeopleAside people={people} person={filters.person} onSelect={setPerson} />
+        {/* En pantallas angostas el panel no va al final de la página: se abre desde "Personas" como hoja. */}
+        <PeopleAside people={people} person={filters.person} onSelect={setPerson} className="max-lg:hidden" />
       </div>
+
+      <Sheet open={peopleOpen} onOpenChange={setPeopleOpen}>
+        <SheetContent size="sm" title="Pendientes por persona" description="Toca un nombre para ver solo lo suyo.">
+          <SheetBody className="px-2 py-2">
+            <PeopleList
+              people={people}
+              person={filters.person}
+              onSelect={(key) => {
+                setPerson(key);
+                setPeopleOpen(false);
+              }}
+            />
+            <PeopleLegend className="mt-3 border-t border-line-2 px-2 pt-3" />
+          </SheetBody>
+          <SheetFooter>
+            {filters.person && (
+              <Button variant="secondary" onClick={() => { setPerson(null); setPeopleOpen(false); }}>
+                Ver todos
+              </Button>
+            )}
+            <Button onClick={() => setPeopleOpen(false)}>Cerrar</Button>
+          </SheetFooter>
+        </SheetContent>
+      </Sheet>
 
       <EmailDialog open={emailOpen} onOpenChange={setEmailOpen} doc={shown} asOf={asOf} />
       <NewCommitteeDialog open={nextOpen} onOpenChange={setNextOpen} doc={doc} asOf={asOf} onCreate={(heldOn) => commit({ type: "newCommittee", heldOn })} />

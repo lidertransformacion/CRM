@@ -11,7 +11,10 @@ import { Tooltip } from "@/components/ui/tooltip";
 import { StepHeader } from "@/components/emails/StepHeader";
 import type { FieldKey, ResolvedField } from "@/components/emails/fields";
 
-/** Paso 3: asunto y cuerpo editables, datos usados y botones de copiar. No envía nada. */
+/**
+ * Paso 3: asunto y cuerpo editables, datos usados y botones de copiar. No envía nada.
+ * En móvil el pie queda pegado al fondo (por encima de la barra de pestañas) para tener «Copiar borrador» siempre a mano.
+ */
 export function DraftEditor({
   subject,
   body,
@@ -52,14 +55,13 @@ export function DraftEditor({
             </>
           ) : undefined
         }
-        
       />
       <CardBody className="flex-1 space-y-4">
         <Field label="Asunto" htmlFor="draft-subject">
           <Input id="draft-subject" value={subject} onChange={(event) => onSubjectChange(event.target.value)} />
         </Field>
         <Field label="Cuerpo" htmlFor="draft-body">
-          <Textarea id="draft-body" value={body} onChange={(event) => onBodyChange(event.target.value)} className="min-h-[340px] font-sans" spellCheck />
+          <Textarea id="draft-body" value={body} onChange={(event) => onBodyChange(event.target.value)} className="min-h-[340px] font-sans max-sm:min-h-[300px]" spellCheck />
         </Field>
         <div className="rounded-lg border border-line-2 bg-surface-2 px-3.5 py-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
@@ -73,7 +75,8 @@ export function DraftEditor({
           {used.length === 0 ? (
             <p className="mt-1 text-xs text-ink-3">Esta plantilla no usa datos de la oportunidad.</p>
           ) : (
-            <dl className="mt-2 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1.5 text-xs">
+            // Móvil: rejilla de 2 columnas con etiqueta sobre valor. Escritorio: etiqueta | valor.
+            <dl className="mt-2 grid grid-cols-2 gap-x-3 gap-y-2 text-xs sm:grid-cols-[auto_minmax(0,1fr)] sm:gap-y-1.5">
               {used.map((field) => (
                 <FieldRow key={field.key} field={field} />
               ))}
@@ -81,8 +84,9 @@ export function DraftEditor({
           )}
         </div>
       </CardBody>
-      <CardFooter>
-        <Button variant="secondary" onClick={onCopySubject}>Copiar solo el asunto</Button>
+      <CardFooter className="max-sm:sticky max-sm:bottom-[calc(3.5rem+env(safe-area-inset-bottom))] max-sm:z-10 max-sm:flex-col-reverse max-sm:items-stretch max-sm:gap-1 max-sm:px-4">
+        <Button variant="secondary" onClick={onCopySubject} className="max-sm:hidden">Copiar solo el asunto</Button>
+        <Button variant="link" onClick={onCopySubject} className="sm:hidden">Copiar solo el asunto</Button>
         <Button onClick={onCopyAll}>
           <Copy /> Copiar borrador
         </Button>
@@ -93,7 +97,7 @@ export function DraftEditor({
 
 function FieldRow({ field }: { field: ResolvedField }) {
   return (
-    <>
+    <div className="min-w-0 sm:contents">
       <dt className="text-ink-3">{field.label}</dt>
       <dd className="flex min-w-0 flex-wrap items-center gap-1.5">
         <span className={field.generic ? "italic text-ink-2" : "truncate text-ink"}>{field.value}</span>
@@ -105,6 +109,6 @@ function FieldRow({ field }: { field: ResolvedField }) {
           </Tooltip>
         )}
       </dd>
-    </>
+    </div>
   );
 }

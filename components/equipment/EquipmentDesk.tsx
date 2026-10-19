@@ -2,11 +2,13 @@
 
 import * as React from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { Ellipsis, FileSpreadsheet, FunnelX, Plus, Settings } from "lucide-react";
+import { Ellipsis, FileSpreadsheet, FunnelX, Plus, Settings, SlidersHorizontal, X } from "lucide-react";
 import type { EquipmentRow } from "@/lib/db";
 import { COMODATO_STATUSES, SITES } from "@/lib/equipment/catalog";
 import type { NextMaintenanceMap } from "@/lib/equipment/queries";
 import { Button } from "@/components/ui/button";
+import { Dialog, DialogBody, DialogContent, DialogFooter } from "@/components/ui/dialog";
+import { Field } from "@/components/ui/field";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { PageHeader, Toolbar } from "@/components/ui/page-header";
 import { SearchInput } from "@/components/ui/search-input";
@@ -27,6 +29,22 @@ const PAGE_SIZE = 50;
 type View = "" | "comodato" | "tienda" | "garantia" | "mantenimiento";
 type ClientFilter = "all" | "with" | "without";
 type Editor = { mode: "create" } | { mode: "edit"; serial: string } | null;
+
+/** Filtros que en móvil viven en la hoja "Filtros" (en escritorio van en la barra). */
+type Filters = { site: string; status: string; category: string; clientFilter: ClientFilter };
+
+const VIEW_LABELS: Record<Exclude<View, "">, string> = {
+  comodato: "En comodato",
+  tienda: "En tienda",
+  garantia: "Garantía vencida",
+  mantenimiento: "Mantenimiento vencido",
+};
+
+const CLIENT_OPTIONS: { value: ClientFilter; label: string }[] = [
+  { value: "all", label: "Todos" },
+  { value: "with", label: "Con cliente" },
+  { value: "without", label: "Sin cliente" },
+];
 
 function haystack(row: EquipmentRow): string {
   return `${row.serial} ${row.name} ${row.store_code} ${row.asset_number} ${row.client_name ?? ""} ${row.category}`.toLowerCase();
@@ -68,6 +86,8 @@ export function EquipmentDesk({
   const [editor, setEditor] = React.useState<Editor>(null);
   const [settingsOpen, setSettingsOpen] = React.useState(false);
   const [diffOpen, setDiffOpen] = React.useState(false);
+  const [filtersOpen, setFiltersOpen] = React.useState(false);
+  const [draft, setDraft] = React.useState<Filters>({ site: "", status: "", category: "", clientFilter: "all" });
 
   // `?nuevo=1` abre el formulario de alta (lo usa Inicio); `?editar=<serial>` abre ese equipo.
   React.useEffect(() => {
@@ -115,6 +135,37 @@ export function EquipmentDesk({
   }, [rows]);
 
   const hasFilters = Boolean(query || site || status || category || clientFilter !== "all" || view);
+
+  /** Filtros activos aparte del buscador: los que se muestran como chips en móvil. */
+  const activeChips: { key: string; label: string; clear: () => void }[] = [
+    view ? { key: "view", label: VIEW_LABELS[view], clear: () => router.replace(pathname) } : null,
+    site ? { key: "site", label: `Sede: ${SITES.find((item) => item.id === site)?.name ?? site}`, clear: () => setSite("") } : null,
+    status ? { key: "status", label: `Estado: ${COMODATO_STATUSES.find((item) => item.id === status)?.label ?? status}`, clear: () => setStatus("") } : null,
+    category ? { key: "category", label: `Categoría: ${category}`, clear: () => setCategory("") } : null,
+    clientFilter !== "all" ? { key: "client", label: CLIENT_OPTIONS.find((item) => item.value === clientFilter)!.label, clear: () => setClientFilter("all") } : null,
+  ].filter((chip): chip is { key: string; label: string; clear: () => void } => chip !== null);
+
+  function openFilters() {
+    setDraft({ site, status, category, clientFilter });
+    setFiltersOpen(true);
+  }
+
+  function applyFilters() {
+    setSite(draft.site);
+    setStatus(draft.status);
+    setCategory(draft.category);
+    setClientFilter(draft.clientFilter);
+    setFiltersOpen(false);
+  }
+
+  function clearDialogFilters() {
+    setDraft({ site: "", status: "", category: "", clientFilter: "all" });
+    setSite("");
+    setStatus("");
+    setCategory("");
+    setClientFilter("all");
+    setFiltersOpen(false);
+  }
 
   function viewHref(target: View): string {
     return view === target || !target ? pathname : `${pathname}?vista=${target}`;
@@ -204,48 +255,63 @@ export function EquipmentDesk({
         }
       >
         <Toolbar>
-          <SearchInput value={query} onChange={setQuery} placeholder="Serial, nombre, código o cliente" className="w-full sm:w-72" aria-label="Buscar equipo" />
-          <Select value={site} onChange={(event) => setSite(event.target.value)} aria-label="Sede" className="w-full sm:w-44">
-            <option value="">Todas las sedes</option>
-            {SITES.map((item) => (
-              <option key={item.id} value={item.id}>
-                {item.name}
-              </option>
-            ))}
-          </Select>
-          <Select value={status} onChange={(event) => setStatus(event.target.value)} aria-label="Estado" className="w-full sm:w-44">
-            <option value="">Todos los estados</option>
-            {COMODATO_STATUSES.map((item) => (
-              <option key={item.id} value={item.id}>
-                {item.label}
-              </option>
-            ))}
-          </Select>
-          <Select value={category} onChange={(event) => setCategory(event.target.value)} aria-label="Categoría" className="w-full sm:w-48">
-            <option value="">Todas las categorías</option>
-            {catalogs.categories.map((item) => (
-              <option key={item} value={item}>
-                {item}
-              </option>
-            ))}
-          </Select>
-          <Segmented<ClientFilter>
-            size="sm"
-            ariaLabel="Filtrar por cliente"
-            value={clientFilter}
-            onChange={setClientFilter}
-            options={[
-              { value: "all", label: "Todos" },
-              { value: "with", label: "Con cliente" },
-              { value: "without", label: "Sin cliente" },
-            ]}
-          />
-          {hasFilters && (
-            <Button variant="ghost" size="sm" onClick={clearFilters}>
-              <FunnelX /> Limpiar filtros
-            </Button>
+          <SearchInput value={query} onChange={setQuery} placeholder="Serial, nombre, código o cliente" className="min-w-0 flex-1 sm:w-72 sm:flex-none" aria-label="Buscar equipo" />
+          {/* Móvil: los filtros van en una hoja; aquí solo el botón con el número de filtros activos. */}
+          <Button variant="secondary" onClick={openFilters} className="sm:hidden" aria-haspopup="dialog" aria-expanded={filtersOpen}>
+            <SlidersHorizontal /> Filtros
+            {activeChips.length > 0 && <span className="num rounded-full bg-navy px-1.5 text-[11px] leading-4 text-crema">{activeChips.length}</span>}
+          </Button>
+          <div className="hidden sm:contents">
+            <Select value={site} onChange={(event) => setSite(event.target.value)} aria-label="Sede" className="w-full sm:w-44">
+              <option value="">Todas las sedes</option>
+              {SITES.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.name}
+                </option>
+              ))}
+            </Select>
+            <Select value={status} onChange={(event) => setStatus(event.target.value)} aria-label="Estado" className="w-full sm:w-44">
+              <option value="">Todos los estados</option>
+              {COMODATO_STATUSES.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.label}
+                </option>
+              ))}
+            </Select>
+            <Select value={category} onChange={(event) => setCategory(event.target.value)} aria-label="Categoría" className="w-full sm:w-48">
+              <option value="">Todas las categorías</option>
+              {catalogs.categories.map((item) => (
+                <option key={item} value={item}>
+                  {item}
+                </option>
+              ))}
+            </Select>
+            <Segmented<ClientFilter> size="sm" ariaLabel="Filtrar por cliente" value={clientFilter} onChange={setClientFilter} options={CLIENT_OPTIONS} />
+            {hasFilters && (
+              <Button variant="ghost" size="sm" onClick={clearFilters}>
+                <FunnelX /> Limpiar filtros
+              </Button>
+            )}
+          </div>
+          {/* Móvil: chips con los filtros activos y su "×". */}
+          {activeChips.length > 0 && (
+            <div className="flex w-full flex-wrap items-center gap-1.5 sm:hidden" aria-label="Filtros activos">
+              {activeChips.map((chip) => (
+                <span key={chip.key} className="inline-flex h-9 items-center gap-0.5 rounded-full border border-navy bg-navy pl-3 pr-0.5 text-xs font-medium text-crema">
+                  {chip.label}
+                  <button type="button" onClick={chip.clear} aria-label={`Quitar filtro ${chip.label}`} className="flex size-8 items-center justify-center rounded-full hover:bg-white/15">
+                    <X className="size-3.5" aria-hidden />
+                  </button>
+                </span>
+              ))}
+              {hasFilters && (
+                <button type="button" onClick={clearFilters} className="inline-flex h-9 items-center px-2 text-xs font-medium text-navy-2">
+                  Limpiar todo
+                </button>
+              )}
+            </div>
           )}
-          <span className="num ml-auto text-xs text-ink-3" aria-live="polite">
+          <span className="num ml-auto text-xs text-ink-3 max-sm:basis-full max-sm:text-right" aria-live="polite">
             Mostrando {filtered.length} de {rows.length}
           </span>
         </Toolbar>
@@ -254,7 +320,7 @@ export function EquipmentDesk({
       <StatGrid className="mb-5">
         <Stat label="Total" value={counts.total} hint="Equipos registrados" href={viewHref("")} className={cn(!view && "border-navy")} />
         <Stat label="En comodato" value={counts.comodato} tone="info" hint="Entregados a clientes" href={viewHref("comodato")} className={cn(view === "comodato" && "border-navy ring-2 ring-navy/15")} />
-        <Stat label="En tienda" value={counts.tienda} hint="Operando en sedes" href={viewHref("tienda")} className={cn(view === "tienda" && "border-navy ring-2 ring-navy/15")} />
+        <Stat label="En tienda" value={counts.tienda} hint="Operando en sedes" href={viewHref("tienda")} className={cn("max-sm:order-last max-sm:col-span-2", view === "tienda" && "border-navy ring-2 ring-navy/15")} />
         <Stat label="Garantía vencida" value={counts.warranty} tone="danger" hint="Según fecha o la hoja" href={viewHref("garantia")} className={cn(view === "garantia" && "border-navy ring-2 ring-navy/15")} />
         <Stat
           label="Mantenimiento vencido"
@@ -295,6 +361,59 @@ export function EquipmentDesk({
         onSaved={handleSaved}
         onAddToList={addToList}
       />
+
+      {/* Hoja de filtros (solo móvil): se aplica con "Aplicar"; "Limpiar" quita todos los filtros. */}
+      <Dialog open={filtersOpen} onOpenChange={setFiltersOpen}>
+        <DialogContent size="sm" title="Filtros" description="Acota la lista por sede, estado, categoría o cliente.">
+          <DialogBody className="space-y-4">
+            <Field label="Sede" htmlFor="filter-site">
+              <Select id="filter-site" value={draft.site} onChange={(event) => setDraft((current) => ({ ...current, site: event.target.value }))}>
+                <option value="">Todas las sedes</option>
+                {SITES.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.name}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+            <Field label="Estado" htmlFor="filter-status">
+              <Select id="filter-status" value={draft.status} onChange={(event) => setDraft((current) => ({ ...current, status: event.target.value }))}>
+                <option value="">Todos los estados</option>
+                {COMODATO_STATUSES.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.label}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+            <Field label="Categoría" htmlFor="filter-category">
+              <Select id="filter-category" value={draft.category} onChange={(event) => setDraft((current) => ({ ...current, category: event.target.value }))}>
+                <option value="">Todas las categorías</option>
+                {catalogs.categories.map((item) => (
+                  <option key={item} value={item}>
+                    {item}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+            <Field label="Cliente">
+              <Segmented<ClientFilter>
+                ariaLabel="Filtrar por cliente"
+                value={draft.clientFilter}
+                onChange={(value) => setDraft((current) => ({ ...current, clientFilter: value }))}
+                options={CLIENT_OPTIONS}
+                className="w-full [&>button]:flex-1 [&>button]:justify-center"
+              />
+            </Field>
+          </DialogBody>
+          <DialogFooter>
+            <Button variant="secondary" onClick={clearDialogFilters}>
+              <FunnelX /> Limpiar
+            </Button>
+            <Button onClick={applyFilters}>Aplicar</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} rate={rate} onRateSaved={setRate} lists={catalogs} onAddToList={addToList} />
 

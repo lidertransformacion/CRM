@@ -9,7 +9,7 @@ import { cop, shortDate } from "@/lib/utils";
 /** Oportunidades abiertas con la próxima actividad vencida. Cada fila abre esa oportunidad en el pipeline. */
 export function LeadsCard({ rows, total }: { rows: LeadAlert[]; total: number }) {
   return (
-    <Card>
+    <Card className="min-w-0">
       <CardHeader
         title="Oportunidades con actividad vencida"
         description="Abiertas en el pipeline y con la próxima actividad ya pasada; las de mayor ingreso primero"
@@ -26,7 +26,8 @@ export function LeadsCard({ rows, total }: { rows: LeadAlert[]; total: number })
               title={row.customer || row.name}
               meta={[row.customer && row.name !== row.customer ? row.name : null, row.seller, row.stage].filter(Boolean).join(" · ")}
               aside={
-                <div className="text-right">
+                // Escritorio: fecha sobre el monto, alineados a la derecha. Móvil: en una sola línea.
+                <div className="flex flex-wrap items-baseline gap-x-2 sm:block sm:text-right">
                   <p className="num text-xs font-medium text-danger" title={`Hace ${plural(row.daysLate, "día")}`}>
                     Venció {shortDate(row.deadline)}
                   </p>

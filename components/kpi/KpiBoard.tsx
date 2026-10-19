@@ -4,10 +4,13 @@ import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Info, Target } from "lucide-react";
 import type { SalesKpi } from "@/lib/kpi/compute";
+import { compactCop } from "@/lib/home/format";
 import { cop, displaySeller, longDate } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Chip } from "@/components/ui/chip";
+import { Field } from "@/components/ui/field";
 import { PageHeader } from "@/components/ui/page-header";
+import { Select } from "@/components/ui/select";
 import { Stat, StatGrid } from "@/components/ui/stat";
 import { useToast } from "@/components/ui/toast";
 import { Tooltip } from "@/components/ui/tooltip";
@@ -65,6 +68,9 @@ export function KpiBoard({ team, people, targets: initialTargets, asOf }: { team
     router.refresh();
   }
 
+  const overdueTone = team.overdueActivities > 0 ? "danger" : "ok";
+  const overdueHint = team.overdueActivities > 0 ? "Por asignado: estado «Vencidas» o fecha límite pasada" : "Nada vencido hoy";
+
   return (
     <div className="page">
       <PageHeader
@@ -87,26 +93,51 @@ export function KpiBoard({ team, people, targets: initialTargets, asOf }: { team
         }
       />
 
-      <StatGrid className="xl:grid-cols-4">
+      {/* Escritorio: los siete indicadores en rejilla. */}
+      <StatGrid className="max-sm:hidden xl:grid-cols-4">
         <Stat label="Abiertas" value={team.open} hint="Etapas 1 a 6 del pipeline" />
         <Stat label="Ganadas" value={team.won} hint="Etapa Cierre / Ganado" tone={team.won > 0 ? "ok" : "neutral"} />
         <Stat label="Perdidas" value={team.lost} hint="Etapa Oportunidad perdida" />
         <Stat label="Tasa de cierre" value={formatRate(team.winRate)} hint="Ganadas ÷ (ganadas + perdidas); las recurrentes no cuentan" />
         <Stat label="Ingreso esperado" value={cop(team.expectedRevenue)} hint="Suma de las oportunidades abiertas" />
         <Stat label="Pronóstico ponderado" value={cop(team.weightedRevenue)} hint="Ingreso esperado × probabilidad de cada una" />
-        <Stat
-          label="Actividades vencidas"
-          value={team.overdueActivities}
-          tone={team.overdueActivities > 0 ? "danger" : "ok"}
-          hint={team.overdueActivities > 0 ? "Por asignado: estado «Vencidas» o fecha límite pasada" : "Nada vencido hoy"}
-        />
+        <Stat label="Actividades vencidas" value={team.overdueActivities} tone={overdueTone} hint={overdueHint} />
       </StatGrid>
+
+      {/* Móvil: los cuatro que más importan en 2 × 2 y los otros tres en una fila desplazable. */}
+      <div className="sm:hidden">
+        <div className="grid grid-cols-2 gap-3">
+          <Stat label="Abiertas" value={team.open} hint="Etapas 1 a 6 del pipeline" />
+          <Stat label="Tasa de cierre" value={formatRate(team.winRate)} hint={`${team.won} ganadas · ${team.lost} perdidas`} />
+          <Stat label="Ingreso esperado" value={compactCop(team.expectedRevenue)} hint={cop(team.expectedRevenue)} />
+          <Stat label="Actividades vencidas" value={team.overdueActivities} tone={overdueTone} hint={overdueHint} />
+        </div>
+        <div className="-mx-4 mt-3 flex snap-x snap-mandatory gap-3 overflow-x-auto px-4 pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden" aria-label="Más indicadores del equipo">
+          <Stat className="w-[62%] shrink-0 snap-start" label="Ganadas" value={team.won} hint="Etapa Cierre / Ganado" tone={team.won > 0 ? "ok" : "neutral"} />
+          <Stat className="w-[62%] shrink-0 snap-start" label="Perdidas" value={team.lost} hint="Etapa Oportunidad perdida" />
+          <Stat className="w-[62%] shrink-0 snap-start" label="Pronóstico ponderado" value={compactCop(team.weightedRevenue)} hint={`${cop(team.weightedRevenue)} · ingreso × probabilidad`} />
+        </div>
+      </div>
 
       <div className="mt-5 space-y-5">
         <TeamTable team={team} people={people} selected={selected} onSelect={(salesperson) => select(salesperson, true)} />
 
         <section ref={detailRef} className="scroll-mt-20 space-y-4" aria-label="Detalle del vendedor">
-          <div className="flex flex-wrap items-center gap-2">
+          {/* Móvil: un selector nativo en vez de quince chips (la lista de arriba también elige). */}
+          <div className="sm:hidden">
+            <Field label="Detalle de" htmlFor="kpi-detail-of">
+              <Select id="kpi-detail-of" value={selected} onChange={(event) => select(event.target.value)}>
+                <option value={TEAM}>Equipo (total)</option>
+                {people.map((person) => (
+                  <option key={person.salesperson} value={person.salesperson}>
+                    {displaySeller(person.salesperson)}
+                    {person.overdueActivities > 0 ? ` · ${person.overdueActivities} ${person.overdueActivities === 1 ? "vencida" : "vencidas"}` : ""}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+          </div>
+          <div className="flex flex-wrap items-center gap-2 max-sm:hidden">
             <span className="mr-1 text-xs font-medium text-ink-3">Detalle de</span>
             <Chip active={selected === TEAM} onClick={() => select(TEAM)}>Equipo</Chip>
             {people.map((person) => (

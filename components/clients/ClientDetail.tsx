@@ -38,7 +38,7 @@ export function ClientDetail({
       <Card>
         <EmptyState
           icon={<Users />}
-          title="Elige un cliente a la izquierda o búscalo con ⌘K"
+          title="Elige un cliente de la lista o búscalo con el buscador"
           description="Verás en una sola línea de tiempo sus oportunidades, actividades, pendientes de comité y equipos en comodato."
         />
       </Card>
