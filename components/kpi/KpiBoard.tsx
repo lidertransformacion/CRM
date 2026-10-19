@@ -26,14 +26,15 @@ export function KpiBoard({ team, people, targets: initialTargets, asOf }: { team
       <div>
         <p className="text-xs tracking-[0.16em] text-[#98a2b3]">COMERCIAL · {asOf}</p>
         <h1 className="font-serif text-4xl">KPIs por vendedor</h1>
-        <p className="max-w-2xl text-sm text-[#667085]">Abiertas, ganadas y perdidas salen de la etapa del pipeline. La antigüedad es desde la creación: el export no trae la fecha de entrada a la etapa. Las metas están vacías hasta que las definan.</p>
+        <p className="max-w-2xl text-sm text-[#667085]">Abiertas, ganadas y perdidas respetan el estado de Odoo (activo, ganado, perdido). La etapa solo decide cuando ese estado sigue pendiente. La antigüedad es desde la creación: el export no trae la fecha de entrada a la etapa.</p>
       </div>
-      <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+      <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
         <Stat label="Abiertas" value={String(team.open)} />
         <Stat label="Ganadas" value={String(team.won)} />
         <Stat label="Perdidas" value={String(team.lost)} />
         <Stat label="Tasa de cierre" value={team.winRate == null ? "—" : `${Math.round(team.winRate * 100)}%`} />
         <Stat label="Ingreso esperado" value={cop(team.expectedRevenue)} />
+        <Stat label="Sin ingreso" value={String(team.missingRevenue)} />
       </section>
       <div className="flex gap-2 overflow-x-auto">
         {people.map((item) => (

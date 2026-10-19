@@ -85,10 +85,10 @@ function cellValue(cell: Cell, shared: string[]): string {
   return "";
 }
 
-export function readXlsxRows(filePath: string): Record<string, string>[] {
-  const files = unzip(fs.readFileSync(filePath));
+export function readXlsxBuffer(buffer: Buffer, label = "xlsx"): Record<string, string>[] {
+  const files = unzip(buffer);
   const sheet = files.get("xl/worksheets/sheet1.xml");
-  if (!sheet) throw new Error(`No worksheet in ${filePath}`);
+  if (!sheet) throw new Error(`No worksheet in ${label}`);
   const shared = files.has("xl/sharedStrings.xml") ? sharedStrings(files.get("xl/sharedStrings.xml")!) : [];
   const doc = parser.parse(sheet) as { worksheet?: { sheetData?: { row?: { c?: Cell | Cell[] }[] } } };
   const matrix = asArray(doc.worksheet?.sheetData?.row).map((row) => {
@@ -111,4 +111,8 @@ export function readXlsxRows(filePath: string): Record<string, string>[] {
     }
     return record;
   });
+}
+
+export function readXlsxRows(filePath: string): Record<string, string>[] {
+  return readXlsxBuffer(fs.readFileSync(filePath), filePath);
 }

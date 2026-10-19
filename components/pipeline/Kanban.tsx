@@ -86,7 +86,7 @@ export function Kanban({ initial }: { initial: Card[] }) {
                       <p className="mt-1 line-clamp-2 text-xs text-[#667085]">{lead.name}</p>
                       <div className="mt-2 flex items-center justify-between text-xs">
                         <span>{displaySeller(lead.salesperson)}</span>
-                        <span>{lead.expected_revenue ? cop(lead.expected_revenue) : ""}</span>
+                        <span>{lead.expected_revenue ? cop(lead.expected_revenue) : "Sin ingreso"}</span>
                       </div>
                       {lead.probability != null && <div className="mt-2 h-1 overflow-hidden rounded-full bg-[#eef1f6]"><div className="h-full bg-[var(--blue)]" style={{ width: `${Math.min(100, lead.probability)}%` }} /></div>}
                       {overdue && <p className="mt-2 text-[11px] font-medium text-rose-600">Actividad vencida · {shortDate(lead.next_activity_deadline)}</p>}

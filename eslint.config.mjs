@@ -18,6 +18,11 @@ const eslintConfig = [
       "out/**",
       "build/**",
       "next-env.d.ts",
+      "dist/**",
+      ".vinext/**",
+      ".wrangler/**",
+      ".cloudflare/**",
+      "lib/import/embedded.ts",
     ],
   },
 ];

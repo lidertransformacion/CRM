@@ -11,6 +11,12 @@ export type LeadFact = {
   probability: number | null;
   createdAt: string | null;
   active: boolean;
+  wonStatus?: string;
+  /** Last stage confirmed by Odoo. KPI classification uses this when the card has a local edit. */
+  odooStage?: string | null;
+  odooExpectedRevenue?: number | null;
+  odooProbability?: number | null;
+  syncState?: string;
 };
 
 export type ActivityFact = {
@@ -37,6 +43,7 @@ export type SalesKpi = {
   winRate: number | null;
   expectedRevenue: number;
   weightedRevenue: number;
+  missingRevenue: number;
   overdueActivities: number;
   stageAging: StageAge[];
 };
@@ -47,11 +54,42 @@ export type KpiBundle = {
   people: SalesKpi[];
 };
 
-function bucket(stage: string): "open" | "won" | "lost" | "recurrente" {
-  if (stage === "OPORTUNIDAD PERDIDA") return "lost";
-  if (stage === "CIERRE/ GANADO") return "won";
-  if (stage === "CLIENTE RECURRENTE") return "recurrente";
+export function normalizeWonStatus(value: string | null | undefined): string {
+  const text = (value ?? "").trim().toLowerCase();
+  if (text === "won" || text === "ganado") return "ganado";
+  if (text === "lost" || text === "perdido") return "perdido";
+  if (text === "pending" || text === "pendiente" || text === "") return "pendiente";
+  return text;
+}
+
+/** Open / won / lost follow Odoo `active` and won/lost status. Stage is only the fallback. */
+export function classifyLead(lead: { stage: string; active: boolean; wonStatus?: string | null }): "open" | "won" | "lost" | "recurrente" {
+  const status = normalizeWonStatus(lead.wonStatus);
+  if (status === "ganado") return "won";
+  if (status === "perdido" || !lead.active) return "lost";
+  if (lead.stage === "OPORTUNIDAD PERDIDA") return "lost";
+  if (lead.stage === "CLIENTE RECURRENTE") return "recurrente";
+  if (lead.stage === "CIERRE/ GANADO") return "won";
   return "open";
+}
+
+export function kpiStage(lead: LeadFact): string {
+  if (lead.syncState === "pending_local" && lead.odooStage) return lead.odooStage;
+  return lead.odooStage || lead.stage;
+}
+
+export function kpiRevenue(lead: LeadFact): number | null {
+  if (lead.syncState === "pending_local") return lead.odooExpectedRevenue ?? lead.expectedRevenue;
+  return lead.expectedRevenue;
+}
+
+export function kpiProbability(lead: LeadFact): number | null {
+  if (lead.syncState === "pending_local") return lead.odooProbability ?? lead.probability;
+  return lead.probability;
+}
+
+export function revenueIsMissing(value: number | null | undefined): boolean {
+  return value == null || value === 0;
 }
 
 export function isActivityOverdue(activity: ActivityFact, asOf: string): boolean {
@@ -63,19 +101,24 @@ function summarize(name: string, leads: LeadFact[], activities: ActivityFact[], 
   const counts = { open: 0, won: 0, lost: 0, recurrente: 0, inactive: 0 };
   let expectedRevenue = 0;
   let weightedRevenue = 0;
+  let missingRevenue = 0;
   const aging = new Map<string, number[]>();
   for (const lead of leads) {
-    const kind = bucket(lead.stage);
+    if (lead.syncState === "pending_create") continue;
+    const stage = kpiStage(lead);
+    const kind = classifyLead({ stage, active: lead.active, wonStatus: lead.wonStatus });
     counts[kind] += 1;
     if (!lead.active) counts.inactive += 1;
     if (kind === "open") {
-      const revenue = lead.expectedRevenue ?? 0;
-      expectedRevenue += revenue;
-      weightedRevenue += revenue * ((lead.probability ?? 0) / 100);
-      if (lead.createdAt && OPEN_STAGES.has(lead.stage)) {
-        const list = aging.get(lead.stage) ?? [];
+      const revenue = kpiRevenue(lead);
+      if (revenueIsMissing(revenue)) missingRevenue += 1;
+      const amount = revenue ?? 0;
+      expectedRevenue += amount;
+      weightedRevenue += amount * ((kpiProbability(lead) ?? 0) / 100);
+      if (lead.createdAt && OPEN_STAGES.has(stage)) {
+        const list = aging.get(stage) ?? [];
         list.push(Math.max(0, daysBetween(lead.createdAt.slice(0, 10), asOf)));
-        aging.set(lead.stage, list);
+        aging.set(stage, list);
       }
     }
   }
@@ -91,6 +134,7 @@ function summarize(name: string, leads: LeadFact[], activities: ActivityFact[], 
     winRate: decided ? counts.won / decided : null,
     expectedRevenue,
     weightedRevenue,
+    missingRevenue,
     overdueActivities: activities.filter((activity) => isActivityOverdue(activity, asOf)).length,
     stageAging,
   };

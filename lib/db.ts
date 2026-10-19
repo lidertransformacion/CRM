@@ -1,6 +1,7 @@
-import fs from "node:fs";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import { ensureBootstrapAdmin } from "@/lib/auth/users";
+import { loadImportBytes, loadImportText } from "@/lib/import/load";
+import { getSql, isSqlDb, type SqlDb } from "@/lib/sql";
 import { buildSeedCommittee } from "@/lib/committee/seed-data";
 import { applyAction, createNextCommittee } from "@/lib/committee/mutate";
 import { cohortsFromDocs, diffDocuments } from "@/lib/committee/compare";
@@ -14,168 +15,12 @@ import { computeKpis, type ActivityFact, type LeadFact } from "@/lib/kpi/compute
 import { OdooSyncAdapter, type OdooCrmAdapter } from "@/lib/odoo/adapter";
 import { assignLeadKeys, mapActivityRow, mapLeadRow, mapTeamRows } from "@/lib/odoo/map";
 import { STAGES } from "@/lib/odoo/stages";
-import { readXlsxRows } from "@/lib/odoo/xlsx";
+import { readXlsxBuffer, readXlsxRows } from "@/lib/odoo/xlsx";
 import { snapshotFromCsv } from "@/lib/sheets/csv";
 import { planPull, planPush } from "@/lib/sheets/diff";
 import type { EquipmentSyncRow } from "@/lib/sheets/types";
 import { stripHtml, todayIso } from "@/lib/utils";
 
-const SCHEMA = `
-CREATE TABLE IF NOT EXISTS committee_docs (
-  id INTEGER PRIMARY KEY,
-  number INTEGER NOT NULL,
-  held_on TEXT NOT NULL,
-  is_current INTEGER NOT NULL,
-  payload TEXT NOT NULL,
-  created_at TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS stages (
-  name TEXT PRIMARY KEY,
-  position INTEGER NOT NULL,
-  is_won INTEGER NOT NULL,
-  is_lost INTEGER NOT NULL,
-  team_restriction TEXT,
-  short_label TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS teams (
-  name TEXT PRIMARY KEY,
-  leader TEXT,
-  active INTEGER NOT NULL,
-  company TEXT
-);
-CREATE TABLE IF NOT EXISTS team_members (
-  team_name TEXT NOT NULL,
-  member_name TEXT NOT NULL,
-  PRIMARY KEY (team_name, member_name)
-);
-CREATE TABLE IF NOT EXISTS leads (
-  import_key TEXT PRIMARY KEY,
-  name TEXT NOT NULL,
-  type TEXT,
-  stage TEXT NOT NULL,
-  team TEXT,
-  salesperson TEXT,
-  customer TEXT,
-  expected_revenue REAL,
-  probability REAL,
-  created_at TEXT,
-  expected_close TEXT,
-  closed_at TEXT,
-  won_status TEXT,
-  active INTEGER NOT NULL,
-  loss_reason TEXT,
-  tags TEXT,
-  next_activity_type TEXT,
-  next_activity_summary TEXT,
-  next_activity_deadline TEXT,
-  odoo_id TEXT,
-  edited_locally INTEGER NOT NULL DEFAULT 0
-);
-CREATE TABLE IF NOT EXISTS activities (
-  id INTEGER PRIMARY KEY,
-  odoo_lead_id TEXT,
-  document_name TEXT,
-  summary TEXT,
-  activity_type TEXT,
-  deadline TEXT,
-  state TEXT,
-  created_at TEXT,
-  note TEXT,
-  assignee TEXT,
-  lead_import_key TEXT
-);
-CREATE TABLE IF NOT EXISTS lead_edits (
-  import_key TEXT PRIMARY KEY,
-  patch_json TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS equipment (
-  serial TEXT PRIMARY KEY,
-  sheet_serial TEXT,
-  asset_number TEXT NOT NULL UNIQUE,
-  name TEXT NOT NULL,
-  category TEXT NOT NULL,
-  site_id TEXT NOT NULL,
-  site_seq INTEGER NOT NULL,
-  store_code TEXT NOT NULL,
-  supplier TEXT,
-  supplier_reference TEXT,
-  model TEXT,
-  warranty_until TEXT,
-  warranty_state TEXT NOT NULL,
-  warranty_raw TEXT,
-  maintenance_every_days INTEGER,
-  hours_min REAL,
-  hours_max REAL,
-  hours_label TEXT,
-  client_name TEXT,
-  address TEXT,
-  city TEXT,
-  city_source TEXT,
-  location_raw TEXT,
-  status TEXT NOT NULL,
-  delivered_on TEXT,
-  salesperson TEXT,
-  lead_import_key TEXT,
-  notes TEXT,
-  dirty_json TEXT NOT NULL DEFAULT '[]',
-  sheet_cells_json TEXT NOT NULL DEFAULT '{}',
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS equipment_history (
-  id INTEGER PRIMARY KEY,
-  serial TEXT NOT NULL,
-  at TEXT NOT NULL,
-  field TEXT NOT NULL,
-  from_value TEXT,
-  to_value TEXT
-);
-CREATE TABLE IF NOT EXISTS maintenance_logs (
-  id INTEGER PRIMARY KEY,
-  serial TEXT NOT NULL,
-  performed_on TEXT NOT NULL,
-  kind TEXT NOT NULL,
-  hours REAL NOT NULL,
-  parts_cost REAL NOT NULL DEFAULT 0,
-  technician TEXT,
-  notes TEXT,
-  condition_after TEXT,
-  visit_cost REAL NOT NULL,
-  created_at TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS suppliers (
-  name TEXT PRIMARY KEY,
-  odoo_name TEXT,
-  nit TEXT,
-  email TEXT,
-  needs_review INTEGER NOT NULL DEFAULT 0
-);
-CREATE TABLE IF NOT EXISTS catalogs (
-  kind TEXT NOT NULL,
-  value TEXT NOT NULL,
-  sort_order INTEGER NOT NULL,
-  PRIMARY KEY (kind, value)
-);
-CREATE TABLE IF NOT EXISTS app_settings (
-  key TEXT PRIMARY KEY,
-  value TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS kpi_targets (
-  id INTEGER PRIMARY KEY,
-  salesperson TEXT NOT NULL DEFAULT '',
-  metric TEXT NOT NULL,
-  period TEXT NOT NULL,
-  target_value REAL NOT NULL,
-  UNIQUE (salesperson, metric, period)
-);
-CREATE TABLE IF NOT EXISTS email_templates (
-  id TEXT PRIMARY KEY,
-  name TEXT NOT NULL,
-  subject TEXT NOT NULL,
-  body TEXT NOT NULL,
-  sort_order INTEGER NOT NULL
-);
-`;
 
 export type EquipmentRow = {
   serial: string;
@@ -212,57 +57,95 @@ export type EquipmentRow = {
   updated_at: string;
 };
 
-const g = globalThis as unknown as { __crmDbs?: Map<string, DatabaseSync> };
 
-/** node:sqlite rows are not plain objects, so React cannot pass them to client components. */
 function plainRows<T extends object>(rows: T[]): T[] {
   return rows.map((row) => ({ ...row }));
 }
 
-export function openDatabase(file: string): DatabaseSync {
-  const db = new DatabaseSync(file);
-  db.exec("PRAGMA foreign_keys = ON;");
-  db.exec(SCHEMA);
-  return db;
+type Prep = {
+  get: (...params: unknown[]) => Promise<unknown>;
+  all: (...params: unknown[]) => Promise<unknown[]>;
+  run: (...params: unknown[]) => Promise<unknown>;
+};
+
+function facade(sql: SqlDb) {
+  return {
+    prepare(text: string): Prep {
+      return {
+        get: (...params: unknown[]) => sql.get(text, params),
+        all: (...params: unknown[]) => sql.all(text, params),
+        run: (...params: unknown[]) => sql.run(text, params),
+      };
+    },
+    exec: (text: string) => sql.exec(text),
+  };
 }
 
-export function getDb(): DatabaseSync {
-  const file = process.env.CRM_DB_PATH || path.join(process.cwd(), "data", "crm.sqlite");
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  if (!g.__crmDbs) g.__crmDbs = new Map();
-  let db = g.__crmDbs.get(file);
-  if (!db) {
-    db = openDatabase(file);
-    seedIfEmpty(db);
-    g.__crmDbs.set(file, db);
+async function rawDb(db?: unknown): Promise<SqlDb> {
+  if (db === undefined || isSqlDb(db)) return db === undefined ? getSql() : db;
+  const { wrapDatabaseSync } = await import("@/lib/sql/node");
+  return wrapDatabaseSync(db as never);
+}
+
+async function attach(db: unknown) {
+  return facade(await rawDb(db));
+}
+
+let seeding: Promise<void> | null = null;
+
+export async function openDatabase(file: string) {
+  const { openDatabaseSync } = await import("@/lib/sql/node");
+  return openDatabaseSync(file);
+}
+
+export async function getDb(): Promise<SqlDb> {
+  const { hydrateProcessEnv } = await import("@/lib/env");
+  await hydrateProcessEnv();
+  const db = await getSql();
+  if (!seeding) {
+    seeding = seedIfEmpty(db).catch((error) => {
+      seeding = null;
+      throw error;
+    });
   }
+  await seeding;
   return db;
 }
 
-export function seedIfEmpty(db: DatabaseSync) {
-  const committee = db.prepare("SELECT COUNT(*) AS n FROM committee_docs").get() as { n: number };
-  if (!committee.n) seedCommittee(db);
-  const leads = db.prepare("SELECT COUNT(*) AS n FROM leads").get() as { n: number };
-  if (!leads.n) importOdooFiles(db, defaultOdooPaths());
-  const equipment = db.prepare("SELECT COUNT(*) AS n FROM equipment").get() as { n: number };
-  if (!equipment.n) seedEquipment(db);
-  const templates = db.prepare("SELECT COUNT(*) AS n FROM email_templates").get() as { n: number };
+async function sqlOf(db?: unknown) {
+  if (db === undefined) return facade(await getDb());
+  return attach(db);
+}
+
+
+
+export async function seedIfEmpty(db?: unknown) {
+  const sql = await sqlOf(db);
+  const committee = await sql.prepare("SELECT COUNT(*) AS n FROM committee_docs").get() as { n: number };
+  if (!committee.n) await seedCommittee(db);
+  const leads = await sql.prepare("SELECT COUNT(*) AS n FROM leads").get() as { n: number };
+  if (!leads.n) await importOdooFiles(db, defaultOdooPaths());
+  const equipment = await sql.prepare("SELECT COUNT(*) AS n FROM equipment").get() as { n: number };
+  if (!equipment.n) await seedEquipment(db);
+  const templates = await sql.prepare("SELECT COUNT(*) AS n FROM email_templates").get() as { n: number };
   if (!templates.n) {
-    const insert = db.prepare("INSERT INTO email_templates (id, name, subject, body, sort_order) VALUES (?, ?, ?, ?, ?)");
-    for (const template of EMAIL_TEMPLATES) insert.run(template.id, template.name, template.subject, template.body, template.sortOrder);
+    const insert = await sql.prepare("INSERT INTO email_templates (id, name, subject, body, sort_order) VALUES (?, ?, ?, ?, ?)");
+    for (const template of EMAIL_TEMPLATES) await insert.run(template.id, template.name, template.subject, template.body, template.sortOrder);
   }
-  const rate = db.prepare("SELECT value FROM app_settings WHERE key = ?").get("maintenance_hourly_rate_cop") as { value: string } | undefined;
-  if (!rate) db.prepare("INSERT INTO app_settings (key, value) VALUES (?, ?)").run("maintenance_hourly_rate_cop", "50000");
+  const rate = await sql.prepare("SELECT value FROM app_settings WHERE key = ?").get("maintenance_hourly_rate_cop") as { value: string } | undefined;
+  if (!rate) await sql.prepare("INSERT INTO app_settings (key, value) VALUES (?, ?)").run("maintenance_hourly_rate_cop", "50000");
   for (const stage of STAGES) {
-    db.prepare(
+    await sql.prepare(
       "INSERT INTO stages (name, position, is_won, is_lost, team_restriction, short_label) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(name) DO NOTHING",
     ).run(stage.name, stage.position, stage.isWon ? 1 : 0, stage.isLost ? 1 : 0, stage.teamRestriction, stage.short);
   }
+  await ensureBootstrapAdmin(await rawDb(db));
 }
 
-function seedCommittee(db: DatabaseSync) {
+async function seedCommittee(db?: unknown) {
+  const sql = await sqlOf(db);
   const doc = buildSeedCommittee();
-  db.prepare("INSERT INTO committee_docs (number, held_on, is_current, payload, created_at) VALUES (?, ?, 1, ?, ?)").run(
+  await sql.prepare("INSERT INTO committee_docs (number, held_on, is_current, payload, created_at) VALUES (?, ?, 1, ?, ?)").run(
     doc.committee.number,
     doc.committee.heldOn,
     JSON.stringify(doc),
@@ -279,22 +162,23 @@ export function defaultOdooPaths() {
   };
 }
 
-export function importOdooFiles(db: DatabaseSync, files: { leads: string; activities: string; teams: string }) {
-  const edits = db.prepare("SELECT import_key, patch_json FROM lead_edits").all() as { import_key: string; patch_json: string }[];
-  const leadRows = readXlsxRows(files.leads).map(mapLeadRow).filter((lead) => lead.name);
+export async function importOdooFiles(db: unknown, files: { leads: string; activities: string; teams: string }) {
+  const sql = await sqlOf(db);
+  const edits = await sql.prepare("SELECT import_key, patch_json FROM lead_edits").all() as { import_key: string; patch_json: string }[];
+  const leadRows = readXlsxBuffer(await loadImportBytes(files.leads), files.leads).map(mapLeadRow).filter((lead) => lead.name);
   const keyed = assignLeadKeys(leadRows);
-  const activities = readXlsxRows(files.activities).map(mapActivityRow);
-  const teams = mapTeamRows(readXlsxRows(files.teams));
-  db.exec("BEGIN");
+  const activities = readXlsxBuffer(await loadImportBytes(files.activities), files.activities).map(mapActivityRow);
+  const teams = mapTeamRows(readXlsxBuffer(await loadImportBytes(files.teams), files.teams));
+  await sql.exec("BEGIN");
   try {
-    db.exec("DELETE FROM activities; DELETE FROM leads; DELETE FROM team_members; DELETE FROM teams;");
-    const insertLead = db.prepare(
+    await sql.exec("DELETE FROM activities; DELETE FROM leads; DELETE FROM team_members; DELETE FROM teams;");
+    const insertLead = await sql.prepare(
       `INSERT INTO leads (import_key, name, type, stage, team, salesperson, customer, expected_revenue, probability, created_at, expected_close, closed_at, won_status, active, loss_reason, tags, next_activity_type, next_activity_summary, next_activity_deadline, odoo_id, edited_locally)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
     );
     const byName = new Map<string, { importKey: string; salesperson: string }[]>();
     for (const { lead, importKey } of keyed) {
-      insertLead.run(
+      await insertLead.run(
         importKey,
         lead.name,
         lead.type,
@@ -320,7 +204,7 @@ export function importOdooFiles(db: DatabaseSync, files: { leads: string; activi
       list.push({ importKey, salesperson: lead.salesperson });
       byName.set(lead.name, list);
     }
-    const insertActivity = db.prepare(
+    const insertActivity = await sql.prepare(
       `INSERT INTO activities (odoo_lead_id, document_name, summary, activity_type, deadline, state, created_at, note, assignee, lead_import_key)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
@@ -331,7 +215,7 @@ export function importOdooFiles(db: DatabaseSync, files: { leads: string; activi
         const byPerson = candidates.filter((candidate) => candidate.salesperson === activity.assignee);
         if (byPerson.length === 1) match = byPerson[0];
       }
-      insertActivity.run(
+      await insertActivity.run(
         activity.odooLeadId,
         activity.documentName,
         activity.summary,
@@ -344,18 +228,18 @@ export function importOdooFiles(db: DatabaseSync, files: { leads: string; activi
         match?.importKey ?? null,
       );
     }
-    const insertTeam = db.prepare("INSERT INTO teams (name, leader, active, company) VALUES (?, ?, ?, ?)");
-    const insertMember = db.prepare("INSERT OR IGNORE INTO team_members (team_name, member_name) VALUES (?, ?)");
+    const insertTeam = await sql.prepare("INSERT INTO teams (name, leader, active, company) VALUES (?, ?, ?, ?)");
+    const insertMember = await sql.prepare("INSERT OR IGNORE INTO team_members (team_name, member_name) VALUES (?, ?)");
     for (const team of teams) {
-      insertTeam.run(team.name, team.leader, team.active ? 1 : 0, team.company);
-      for (const member of team.members) insertMember.run(team.name, member);
+      await insertTeam.run(team.name, team.leader, team.active ? 1 : 0, team.company);
+      for (const member of team.members) await insertMember.run(team.name, member);
     }
-    const update = db.prepare(
+    const update = await sql.prepare(
       `UPDATE leads SET stage = COALESCE(?, stage), expected_revenue = COALESCE(?, expected_revenue), probability = COALESCE(?, probability), expected_close = COALESCE(?, expected_close), salesperson = COALESCE(?, salesperson), next_activity_summary = COALESCE(?, next_activity_summary), edited_locally = 1 WHERE import_key = ?`,
     );
     for (const edit of edits) {
       const patch = JSON.parse(edit.patch_json) as Record<string, string | number | null>;
-      update.run(
+      await update.run(
         patch.stage ?? null,
         patch.expectedRevenue ?? null,
         patch.probability ?? null,
@@ -365,25 +249,26 @@ export function importOdooFiles(db: DatabaseSync, files: { leads: string; activi
         edit.import_key,
       );
     }
-    db.exec("COMMIT");
+    await sql.exec("COMMIT");
   } catch (error) {
-    db.exec("ROLLBACK");
+    await sql.exec("ROLLBACK");
     throw error;
   }
 }
 
-function catalog(db: DatabaseSync, kind: string, value: string) {
+async function catalog(db: unknown, kind: string, value: string) {
+  const sql = await sqlOf(db);
   if (!value) return;
-  const count = db.prepare("SELECT COUNT(*) AS n FROM catalogs WHERE kind = ?").get(kind) as { n: number };
-  db.prepare("INSERT INTO catalogs (kind, value, sort_order) VALUES (?, ?, ?) ON CONFLICT(kind, value) DO NOTHING").run(kind, value, count.n + 1);
+  const count = await sql.prepare("SELECT COUNT(*) AS n FROM catalogs WHERE kind = ?").get(kind) as { n: number };
+  await sql.prepare("INSERT INTO catalogs (kind, value, sort_order) VALUES (?, ?, ?) ON CONFLICT(kind, value) DO NOTHING").run(kind, value, count.n + 1);
 }
 
-function seedEquipment(db: DatabaseSync) {
-  const csvPath = path.join(process.cwd(), "data", "imports", "listado_equipos.csv");
-  const snapshot = snapshotFromCsv(fs.readFileSync(csvPath, "utf8"));
-  const suppliers = parseCsv(fs.readFileSync(path.join(process.cwd(), "data", "imports", "info_proveedores.csv"), "utf8"));
+async function seedEquipment(db?: unknown) {
+  const sql = await sqlOf(db);
+  const snapshot = snapshotFromCsv(await loadImportText("listado_equipos.csv"));
+  const suppliers = parseCsv(await loadImportText("info_proveedores.csv"));
   const headers = suppliers[0] ?? [];
-  const insertSupplier = db.prepare("INSERT OR REPLACE INTO suppliers (name, odoo_name, nit, email, needs_review) VALUES (?, ?, ?, ?, ?)");
+  const insertSupplier = await sql.prepare("INSERT OR REPLACE INTO suppliers (name, odoo_name, nit, email, needs_review) VALUES (?, ?, ?, ?, ?)");
   for (const cells of suppliers.slice(1)) {
     const record = Object.fromEntries(headers.map((header, index) => [header.trim(), (cells[index] ?? "").trim()]));
     const name = record["Nombre"] ?? "";
@@ -392,10 +277,10 @@ function seedEquipment(db: DatabaseSync) {
     const nit = record["NIT"] ?? "";
     const email = record["Correo Electronico Facturacion"] ?? "";
     const needs = /revisar/i.test(odoo) || !nit ? 1 : 0;
-    insertSupplier.run(name, odoo, nit, email, needs);
-    catalog(db, "supplier", canonicalSupplier(name));
+    await insertSupplier.run(name, odoo, nit, email, needs);
+    await catalog(db, "supplier", canonicalSupplier(name));
   }
-  const insert = db.prepare(
+  const insert = await sql.prepare(
     `INSERT INTO equipment (
       serial, sheet_serial, asset_number, name, category, site_id, site_seq, store_code, supplier, supplier_reference, model,
       warranty_until, warranty_state, warranty_raw, maintenance_every_days, hours_min, hours_max, hours_label,
@@ -404,7 +289,7 @@ function seedEquipment(db: DatabaseSync) {
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, '', '[]', ?, ?, ?)`,
   );
   const now = new Date().toISOString();
-  snapshot.rows.forEach((row, index) => {
+  for (const [index, row] of snapshot.rows.entries()) {
     const siteId = row.cells["ID"] ?? "";
     const seq = Number(row.cells.idnum || "0");
     const category = canonicalCategory(row.cells["Categoría del equipo"]);
@@ -415,7 +300,7 @@ function seedEquipment(db: DatabaseSync) {
     const every = everyRaw ? Number(everyRaw) : null;
     const location = splitLocation(row.cells["Ubicación Comercial cliente hospitality"]);
     const status = location.client || location.address ? "en_comodato" : "en_tienda";
-    insert.run(
+    await insert.run(
       row.serial,
       row.serial,
       assetNumber(index + 1),
@@ -444,31 +329,33 @@ function seedEquipment(db: DatabaseSync) {
       now,
       now,
     );
-    catalog(db, "category", category);
-    if (supplier) catalog(db, "supplier", supplier);
-    if (location.client) catalog(db, "client", location.client);
-    if (location.city) catalog(db, "city", location.city);
-  });
-  for (const client of knownClients()) catalog(db, "client", client);
-  for (const city of CITIES) catalog(db, "city", city);
-  for (const site of SITES) catalog(db, "site", site.id);
-  const sellers = db.prepare("SELECT DISTINCT salesperson FROM leads WHERE salesperson != ''").all() as { salesperson: string }[];
-  for (const seller of sellers) catalog(db, "salesperson", seller.salesperson);
+    await catalog(db, "category", category);
+    if (supplier) await catalog(db, "supplier", supplier);
+    if (location.client) await catalog(db, "client", location.client);
+    if (location.city) await catalog(db, "city", location.city);
+  }
+  for (const client of knownClients()) await catalog(db, "client", client);
+  for (const city of CITIES) await catalog(db, "city", city);
+  for (const site of SITES) await catalog(db, "site", site.id);
+  const sellers = await sql.prepare("SELECT DISTINCT salesperson FROM leads WHERE salesperson != ''").all() as { salesperson: string }[];
+  for (const seller of sellers) await catalog(db, "salesperson", seller.salesperson);
 }
 
-export function currentCommittee(db = getDb()): { id: number; doc: CommitteeDoc } {
-  const row = db.prepare("SELECT id, payload FROM committee_docs WHERE is_current = 1").get() as { id: number; payload: string };
+export async function currentCommittee(db?: unknown): { id: number; doc: CommitteeDoc } {
+  const sql = await sqlOf(db);
+  const row = await sql.prepare("SELECT id, payload FROM committee_docs WHERE is_current = 1").get() as { id: number; payload: string };
   return { id: row.id, doc: JSON.parse(row.payload) as CommitteeDoc };
 }
 
-export function committeeHistory(db = getDb()) {
-  const docs = db.prepare("SELECT id, number, held_on, is_current FROM committee_docs ORDER BY number").all() as {
+export async function committeeHistory(db?: unknown) {
+  const sql = await sqlOf(db);
+  const docs = await sql.prepare("SELECT id, number, held_on, is_current FROM committee_docs ORDER BY number").all() as {
     id: number;
     number: number;
     held_on: string;
     is_current: number;
   }[];
-  const current = currentCommittee(db).doc;
+  const current = (await currentCommittee(db)).doc;
   const withDocs = new Set(docs.map((doc) => doc.number));
   const calendarOnly = current.calendar
     .filter((entry) => !withDocs.has(entry.number))
@@ -479,33 +366,35 @@ export function committeeHistory(db = getDb()) {
   ].sort((a, b) => a.number - b.number);
 }
 
-export function committeeByNumber(number: number, db = getDb()): CommitteeDoc | null {
-  const row = db.prepare("SELECT payload FROM committee_docs WHERE number = ?").get(number) as { payload: string } | undefined;
+export async function committeeByNumber(number: number, db?: unknown): CommitteeDoc | null {
+  const sql = await sqlOf(db);
+  const row = await sql.prepare("SELECT payload FROM committee_docs WHERE number = ?").get(number) as { payload: string } | undefined;
   return row ? (JSON.parse(row.payload) as CommitteeDoc) : null;
 }
 
-export function mutateCommittee(action: CommitteeAction, db = getDb()): CommitteeDoc {
-  const current = currentCommittee(db);
+export async function mutateCommittee(action: CommitteeAction, db?: unknown): CommitteeDoc {
+  const sql = await sqlOf(db);
+  const current = await currentCommittee(db);
   if (action.type === "newCommittee") {
     const { next } = createNextCommittee(current.doc, action.heldOn);
-    db.exec("BEGIN");
+    await sql.exec("BEGIN");
     try {
-      db.prepare("UPDATE committee_docs SET is_current = 0 WHERE id = ?").run(current.id);
-      db.prepare("INSERT INTO committee_docs (number, held_on, is_current, payload, created_at) VALUES (?, ?, 1, ?, ?)").run(
+      await sql.prepare("UPDATE committee_docs SET is_current = 0 WHERE id = ?").run(current.id);
+      await sql.prepare("INSERT INTO committee_docs (number, held_on, is_current, payload, created_at) VALUES (?, ?, 1, ?, ?)").run(
         next.committee.number,
         next.committee.heldOn,
         JSON.stringify(next),
         new Date().toISOString(),
       );
-      db.exec("COMMIT");
+      await sql.exec("COMMIT");
     } catch (error) {
-      db.exec("ROLLBACK");
+      await sql.exec("ROLLBACK");
       throw error;
     }
     return next;
   }
   const next = applyAction(current.doc, action);
-  db.prepare("UPDATE committee_docs SET payload = ?, held_on = ?, number = ? WHERE id = ?").run(
+  await sql.prepare("UPDATE committee_docs SET payload = ?, held_on = ?, number = ? WHERE id = ?").run(
     JSON.stringify(next),
     next.committee.heldOn,
     next.committee.number,
@@ -514,14 +403,15 @@ export function mutateCommittee(action: CommitteeAction, db = getDb()): Committe
   return next;
 }
 
-export function allCommitteeDocs(db = getDb()): CommitteeDoc[] {
-  return (db.prepare("SELECT payload FROM committee_docs ORDER BY number").all() as { payload: string }[]).map(
+export async function allCommitteeDocs(db?: unknown): CommitteeDoc[] {
+  const sql = await sqlOf(db);
+  return (await sql.prepare("SELECT payload FROM committee_docs ORDER BY number").all() as { payload: string }[]).map(
     (row) => JSON.parse(row.payload) as CommitteeDoc,
   );
 }
 
-export function compareCommittees(left: number, right: number, db = getDb()) {
-  const docs = allCommitteeDocs(db);
+export async function compareCommittees(left: number, right: number, db?: unknown) {
+  const docs = await allCommitteeDocs(db);
   const leftDoc = docs.find((doc) => doc.committee.number === left);
   const rightDoc = docs.find((doc) => doc.committee.number === right);
   return {
@@ -553,17 +443,19 @@ export type LeadRecord = {
   edited_locally: number;
 };
 
-export function listLeads(db = getDb()): LeadRecord[] {
-  return plainRows(db.prepare("SELECT * FROM leads").all() as LeadRecord[]);
+export async function listLeads(db?: unknown): LeadRecord[] {
+  const sql = await sqlOf(db);
+  return plainRows(await sql.prepare("SELECT * FROM leads").all() as LeadRecord[]);
 }
 
-export function updateLead(importKey: string, patch: Record<string, string | number | null>, db = getDb()) {
+export async function updateLead(importKey: string, patch: Record<string, string | number | null>, db?: unknown) {
+  const sql = await sqlOf(db);
   const allowed = ["stage", "expectedRevenue", "probability", "expectedClose", "salesperson", "nextActivitySummary"] as const;
   const clean: Record<string, string | number | null> = {};
   for (const key of allowed) if (key in patch) clean[key] = patch[key];
-  const existing = db.prepare("SELECT patch_json FROM lead_edits WHERE import_key = ?").get(importKey) as { patch_json: string } | undefined;
+  const existing = await sql.prepare("SELECT patch_json FROM lead_edits WHERE import_key = ?").get(importKey) as { patch_json: string } | undefined;
   const merged = { ...(existing ? JSON.parse(existing.patch_json) : {}), ...clean };
-  db.prepare(
+  await sql.prepare(
     `UPDATE leads SET
       stage = COALESCE(?, stage),
       expected_revenue = CASE WHEN ? IS NULL THEN expected_revenue ELSE ? END,
@@ -586,34 +478,37 @@ export function updateLead(importKey: string, patch: Record<string, string | num
     clean.nextActivitySummary ?? null,
     importKey,
   );
-  db.prepare("INSERT INTO lead_edits (import_key, patch_json) VALUES (?, ?) ON CONFLICT(import_key) DO UPDATE SET patch_json = excluded.patch_json").run(
+  await sql.prepare("INSERT INTO lead_edits (import_key, patch_json) VALUES (?, ?) ON CONFLICT(import_key) DO UPDATE SET patch_json = excluded.patch_json").run(
     importKey,
     JSON.stringify(merged),
   );
 }
 
-export function searchLeads(query: string, db = getDb()) {
+export async function searchLeads(query: string, db?: unknown) {
+  const sql = await sqlOf(db);
   const like = `%${query.trim()}%`;
-  return db
+  return (await sql
     .prepare(
       `SELECT import_key, name, customer, salesperson, stage, expected_revenue FROM leads
        WHERE name LIKE ? OR customer LIKE ? OR salesperson LIKE ?
        ORDER BY customer LIMIT 20`,
     )
-    .all(like, like, like) as Pick<LeadRecord, "import_key" | "name" | "customer" | "salesperson" | "stage" | "expected_revenue">[];
+    .all(like, like, like)) as Pick<LeadRecord, "import_key" | "name" | "customer" | "salesperson" | "stage" | "expected_revenue">[];
 }
 
-export function leadLabel(importKey: string | null, db = getDb()) {
+export async function leadLabel(importKey: string | null, db?: unknown) {
+  const sql = await sqlOf(db);
   if (!importKey) return null;
   return (
-    (db.prepare("SELECT import_key, name, customer, stage FROM leads WHERE import_key = ?").get(importKey) as
+    (await sql.prepare("SELECT import_key, name, customer, stage FROM leads WHERE import_key = ?").get(importKey) as
       | { import_key: string; name: string; customer: string; stage: string }
       | undefined) ?? null
   );
 }
 
-function leadFacts(db: DatabaseSync): LeadFact[] {
-  return (db.prepare("SELECT import_key, name, stage, salesperson, customer, expected_revenue, probability, created_at, active FROM leads").all() as LeadRecord[]).map(
+async function leadFacts(db?: unknown): LeadFact[] {
+  const sql = await sqlOf(db);
+  return (await sql.prepare("SELECT import_key, name, stage, salesperson, customer, expected_revenue, probability, created_at, active, won_status FROM leads").all() as LeadRecord[]).map(
     (lead) => ({
       importKey: lead.import_key,
       name: lead.name,
@@ -624,15 +519,17 @@ function leadFacts(db: DatabaseSync): LeadFact[] {
       probability: lead.probability,
       createdAt: lead.created_at,
       active: !!lead.active,
+      wonStatus: lead.won_status,
     }),
   );
 }
 
-export function kpiData(asOf = todayIso(), db = getDb()) {
-  const activities = db.prepare("SELECT assignee, deadline, state FROM activities").all() as ActivityFact[];
-  const bundle = computeKpis(leadFacts(db), activities, asOf);
+export async function kpiData(asOf = todayIso(), db?: unknown) {
+  const sql = await sqlOf(db);
+  const activities = await sql.prepare("SELECT assignee, deadline, state FROM activities").all() as ActivityFact[];
+  const bundle = computeKpis(await leadFacts(db), activities, asOf);
   const targets = plainRows(
-    db.prepare("SELECT id, salesperson, metric, period, target_value FROM kpi_targets ORDER BY period, salesperson").all() as {
+    await sql.prepare("SELECT id, salesperson, metric, period, target_value FROM kpi_targets ORDER BY period, salesperson").all() as {
       id: number;
       salesperson: string;
       metric: string;
@@ -643,27 +540,32 @@ export function kpiData(asOf = todayIso(), db = getDb()) {
   return { ...bundle, targets, metricsReady: true };
 }
 
-export function saveTarget(input: { salesperson: string; metric: string; period: string; targetValue: number }, db = getDb()) {
-  db.prepare(
+export async function saveTarget(input: { salesperson: string; metric: string; period: string; targetValue: number }, db?: unknown) {
+  const sql = await sqlOf(db);
+  await sql.prepare(
     `INSERT INTO kpi_targets (salesperson, metric, period, target_value) VALUES (?, ?, ?, ?)
      ON CONFLICT (salesperson, metric, period) DO UPDATE SET target_value = excluded.target_value`,
   ).run(input.salesperson, input.metric, input.period, input.targetValue);
 }
 
-export function deleteTarget(id: number, db = getDb()) {
-  db.prepare("DELETE FROM kpi_targets WHERE id = ?").run(id);
+export async function deleteTarget(id: number, db?: unknown) {
+  const sql = await sqlOf(db);
+  await sql.prepare("DELETE FROM kpi_targets WHERE id = ?").run(id);
 }
 
-export function listEquipment(db = getDb()): EquipmentRow[] {
-  return plainRows(db.prepare("SELECT * FROM equipment ORDER BY site_id, site_seq").all() as EquipmentRow[]);
+export async function listEquipment(db?: unknown): EquipmentRow[] {
+  const sql = await sqlOf(db);
+  return plainRows(await sql.prepare("SELECT * FROM equipment ORDER BY site_id, site_seq").all() as EquipmentRow[]);
 }
 
-export function getEquipment(serial: string, db = getDb()): EquipmentRow | undefined {
-  return db.prepare("SELECT * FROM equipment WHERE serial = ?").get(serial) as EquipmentRow | undefined;
+export async function getEquipment(serial: string, db?: unknown): EquipmentRow | undefined {
+  const sql = await sqlOf(db);
+  return await sql.prepare("SELECT * FROM equipment WHERE serial = ?").get(serial) as EquipmentRow | undefined;
 }
 
-export function equipmentHistory(serial: string, db = getDb()) {
-  return db.prepare("SELECT * FROM equipment_history WHERE serial = ? ORDER BY id DESC").all(serial) as {
+export async function equipmentHistory(serial: string, db?: unknown) {
+  const sql = await sqlOf(db);
+  return await sql.prepare("SELECT * FROM equipment_history WHERE serial = ? ORDER BY id DESC").all(serial) as {
     id: number;
     serial: string;
     at: string;
@@ -673,8 +575,9 @@ export function equipmentHistory(serial: string, db = getDb()) {
   }[];
 }
 
-export function maintenanceLogs(serial: string, db = getDb()) {
-  return db.prepare("SELECT * FROM maintenance_logs WHERE serial = ? ORDER BY performed_on DESC, id DESC").all(serial) as {
+export async function maintenanceLogs(serial: string, db?: unknown) {
+  const sql = await sqlOf(db);
+  return await sql.prepare("SELECT * FROM maintenance_logs WHERE serial = ? ORDER BY performed_on DESC, id DESC").all(serial) as {
     id: number;
     serial: string;
     performed_on: string;
@@ -689,24 +592,27 @@ export function maintenanceLogs(serial: string, db = getDb()) {
   }[];
 }
 
-export function hourlyRate(db = getDb()): number {
-  const row = db.prepare("SELECT value FROM app_settings WHERE key = ?").get("maintenance_hourly_rate_cop") as { value: string } | undefined;
+export async function hourlyRate(db?: unknown): Promise<number> {
+  const sql = await sqlOf(db);
+  const row = await sql.prepare("SELECT value FROM app_settings WHERE key = ?").get("maintenance_hourly_rate_cop") as { value: string } | undefined;
   return Number(row?.value ?? 50000);
 }
 
-export function setHourlyRate(value: number, db = getDb()) {
-  db.prepare("INSERT INTO app_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(
+export async function setHourlyRate(value: number, db?: unknown) {
+  const sql = await sqlOf(db);
+  await sql.prepare("INSERT INTO app_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(
     "maintenance_hourly_rate_cop",
     String(value),
   );
 }
 
-export function catalogValues(kind: string, db = getDb()): string[] {
-  return (db.prepare("SELECT value FROM catalogs WHERE kind = ? ORDER BY sort_order, value").all(kind) as { value: string }[]).map((row) => row.value);
+export async function catalogValues(kind: string, db?: unknown): string[] {
+  const sql = await sqlOf(db);
+  return (await sql.prepare("SELECT value FROM catalogs WHERE kind = ? ORDER BY sort_order, value").all(kind) as { value: string }[]).map((row) => row.value);
 }
 
-export function addCatalogValue(kind: string, value: string, db = getDb()) {
-  catalog(db, kind, value.trim());
+export async function addCatalogValue(kind: string, value: string, db?: unknown) {
+  await catalog(db, kind, value.trim());
 }
 
 export type EquipmentInput = {
@@ -735,21 +641,22 @@ function markDirty(current: string[], fields: string[]): string[] {
   return [...new Set([...current, ...fields])];
 }
 
-export function createEquipment(input: EquipmentInput, db = getDb()): EquipmentRow {
+export async function createEquipment(input: EquipmentInput, db?: unknown): EquipmentRow {
+  const sql = await sqlOf(db);
   const serial = input.serial.trim();
   if (!serial) throw new Error("El serial es obligatorio.");
-  if (getEquipment(serial, db)) throw new Error("Ese serial ya existe.");
+  if (await getEquipment(serial, db)) throw new Error("Ese serial ya existe.");
   if (!siteById(input.siteId)) throw new Error("La sede no está en la lista.");
   if (!input.name.trim()) throw new Error("El nombre es obligatorio.");
   if (!input.category.trim()) throw new Error("La categoría es obligatoria.");
-  const maxAsset = db.prepare("SELECT asset_number FROM equipment ORDER BY asset_number DESC LIMIT 1").get() as { asset_number: string } | undefined;
+  const maxAsset = await sql.prepare("SELECT asset_number FROM equipment ORDER BY asset_number DESC LIMIT 1").get() as { asset_number: string } | undefined;
   const assetSeq = maxAsset ? Number(maxAsset.asset_number.replace(/\D/g, "")) + 1 : 1;
-  const maxSeq = db.prepare("SELECT COALESCE(MAX(site_seq), 0) AS n FROM equipment WHERE site_id = ?").get(input.siteId) as { n: number };
+  const maxSeq = await sql.prepare("SELECT COALESCE(MAX(site_seq), 0) AS n FROM equipment WHERE site_id = ?").get(input.siteId) as { n: number };
   const seq = Number(maxSeq.n) + 1;
   const now = new Date().toISOString();
   const status = input.status || (input.clientName ? "en_comodato" : "en_tienda");
   const warranty = parseWarranty(input.warrantyUntil ?? "");
-  db.prepare(
+  await sql.prepare(
     `INSERT INTO equipment (
       serial, sheet_serial, asset_number, name, category, site_id, site_seq, store_code, supplier, supplier_reference, model,
       warranty_until, warranty_state, warranty_raw, maintenance_every_days, hours_min, hours_max, hours_label,
@@ -785,12 +692,12 @@ export function createEquipment(input: EquipmentInput, db = getDb()): EquipmentR
     now,
     now,
   );
-  db.prepare("INSERT INTO equipment_history (serial, at, field, from_value, to_value) VALUES (?, ?, 'alta', '', ?)").run(serial, now, status);
-  catalog(db, "category", input.category.trim());
-  if (input.supplier) catalog(db, "supplier", input.supplier.trim());
-  if (input.clientName) catalog(db, "client", input.clientName.trim());
-  if (input.city) catalog(db, "city", input.city.trim());
-  return getEquipment(serial, db)!;
+  await sql.prepare("INSERT INTO equipment_history (serial, at, field, from_value, to_value) VALUES (?, ?, 'alta', '', ?)").run(serial, now, status);
+  await catalog(db, "category", input.category.trim());
+  if (input.supplier) await catalog(db, "supplier", input.supplier.trim());
+  if (input.clientName) await catalog(db, "client", input.clientName.trim());
+  if (input.city) await catalog(db, "city", input.city.trim());
+  return (await getEquipment(serial, db))!;
 }
 
 const TRACKED: { field: string; column: keyof EquipmentRow; dirty?: string }[] = [
@@ -806,14 +713,15 @@ const TRACKED: { field: string; column: keyof EquipmentRow; dirty?: string }[] =
   { field: "delivered_on", column: "delivered_on" },
 ];
 
-export function updateEquipment(serial: string, input: EquipmentInput, db = getDb()): EquipmentRow {
-  const current = getEquipment(serial, db);
+export async function updateEquipment(serial: string, input: EquipmentInput, db?: unknown): EquipmentRow {
+  const sql = await sqlOf(db);
+  const current = await getEquipment(serial, db);
   if (!current) throw new Error("No está ese equipo.");
   if (!siteById(input.siteId)) throw new Error("La sede no está en la lista.");
   let siteSeq = current.site_seq;
   let code = current.store_code;
   if (input.siteId !== current.site_id) {
-    const maxSeq = db.prepare("SELECT COALESCE(MAX(site_seq), 0) AS n FROM equipment WHERE site_id = ?").get(input.siteId) as { n: number };
+    const maxSeq = await sql.prepare("SELECT COALESCE(MAX(site_seq), 0) AS n FROM equipment WHERE site_id = ?").get(input.siteId) as { n: number };
     siteSeq = Number(maxSeq.n) + 1;
     code = storeCode(input.siteId, siteSeq);
   }
@@ -837,7 +745,7 @@ export function updateEquipment(serial: string, input: EquipmentInput, db = getD
     const before = current[tracked.column] == null ? "" : String(current[tracked.column]);
     const after = nextValues[tracked.column] == null ? "" : String(nextValues[tracked.column]);
     if (before !== after) {
-      db.prepare("INSERT INTO equipment_history (serial, at, field, from_value, to_value) VALUES (?, ?, ?, ?, ?)").run(serial, now, tracked.field, before, after);
+      await sql.prepare("INSERT INTO equipment_history (serial, at, field, from_value, to_value) VALUES (?, ?, ?, ?, ?)").run(serial, now, tracked.field, before, after);
       if (tracked.dirty) dirty.push(tracked.dirty);
     }
   }
@@ -847,14 +755,14 @@ export function updateEquipment(serial: string, input: EquipmentInput, db = getD
   if ((input.everyDays ?? null) !== current.maintenance_every_days) dirty.push("maintenance");
   if ((input.hoursMin ?? null) !== current.hours_min || (input.hoursMax ?? null) !== current.hours_max) dirty.push("hours");
   if (code !== current.store_code) {
-    db.prepare("INSERT INTO equipment_history (serial, at, field, from_value, to_value) VALUES (?, ?, 'store_code', ?, ?)").run(
+    await sql.prepare("INSERT INTO equipment_history (serial, at, field, from_value, to_value) VALUES (?, ?, 'store_code', ?, ?)").run(
       serial,
       now,
       current.store_code,
       code,
     );
   }
-  db.prepare(
+  await sql.prepare(
     `UPDATE equipment SET name=?, category=?, site_id=?, site_seq=?, store_code=?, supplier=?, supplier_reference=?, model=?,
       warranty_until=?, warranty_state=?, maintenance_every_days=?, hours_min=?, hours_max=?, hours_label=?,
       client_name=?, address=?, city=?, status=?, delivered_on=?, salesperson=?, lead_import_key=?, notes=?, dirty_json=?, updated_at=?
@@ -886,27 +794,28 @@ export function updateEquipment(serial: string, input: EquipmentInput, db = getD
     now,
     serial,
   );
-  catalog(db, "category", input.category.trim());
-  if (input.supplier) catalog(db, "supplier", input.supplier.trim());
-  if (input.clientName) catalog(db, "client", input.clientName.trim());
-  if (input.city) catalog(db, "city", input.city.trim());
-  return getEquipment(serial, db)!;
+  await catalog(db, "category", input.category.trim());
+  if (input.supplier) await catalog(db, "supplier", input.supplier.trim());
+  if (input.clientName) await catalog(db, "client", input.clientName.trim());
+  if (input.city) await catalog(db, "city", input.city.trim());
+  return (await getEquipment(serial, db))!;
 }
 
-export function addMaintenance(
+export async function addMaintenance(
   serial: string,
   input: { performedOn: string; kind: string; hours: number; partsCost: number; technician: string; notes: string; conditionAfter: string },
-  db = getDb(),
+  db?: unknown,
 ) {
-  if (!getEquipment(serial, db)) throw new Error("No está ese equipo.");
-  const rate = hourlyRate(db);
+  const sql = await sqlOf(db);
+  if (!await getEquipment(serial, db)) throw new Error("No está ese equipo.");
+  const rate = await hourlyRate(db);
   const visit = input.hours * rate + (input.partsCost || 0);
   const now = new Date().toISOString();
-  db.prepare(
+  await sql.prepare(
     `INSERT INTO maintenance_logs (serial, performed_on, kind, hours, parts_cost, technician, notes, condition_after, visit_cost, created_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(serial, input.performedOn, input.kind, input.hours, input.partsCost || 0, input.technician, input.notes, input.conditionAfter, visit, now);
-  db.prepare("INSERT INTO equipment_history (serial, at, field, from_value, to_value) VALUES (?, ?, 'mantenimiento', '', ?)").run(
+  await sql.prepare("INSERT INTO equipment_history (serial, at, field, from_value, to_value) VALUES (?, ?, 'mantenimiento', '', ?)").run(
     serial,
     now,
     `${input.kind} · ${input.performedOn}`,
@@ -940,9 +849,9 @@ export function toSyncRow(row: EquipmentRow): EquipmentSyncRow {
   };
 }
 
-export function sheetPlans(db = getDb()) {
-  const snapshot = snapshotFromCsv(fs.readFileSync(path.join(process.cwd(), "data", "imports", "listado_equipos.csv"), "utf8"));
-  const local = listEquipment(db).map(toSyncRow);
+export async function sheetPlans(db?: unknown) {
+  const snapshot = snapshotFromCsv(await loadImportText("listado_equipos.csv"));
+  const local = (await listEquipment(db)).map(toSyncRow);
   return {
     enabled: process.env.SHEETS_SYNC_ENABLED === "true",
     mode: process.env.SHEETS_SYNC_ENABLED === "true" ? "live" : "dry-run",
@@ -951,13 +860,17 @@ export function sheetPlans(db = getDb()) {
   };
 }
 
-export function clientDirectory(db = getDb()) {
-  const leads = db.prepare(
+export async function clientDirectory(db?: unknown) {
+  const sql = await sqlOf(db);
+  const leads = await sql.prepare(
     `SELECT customer, COUNT(*) AS opportunities,
-            SUM(CASE WHEN stage NOT IN ('CIERRE/ GANADO', 'OPORTUNIDAD PERDIDA', 'CLIENTE RECURRENTE') THEN COALESCE(expected_revenue, 0) ELSE 0 END) AS pipeline
+            SUM(CASE WHEN active = 1
+              AND lower(COALESCE(won_status, '')) NOT IN ('ganado', 'won', 'perdido', 'lost')
+              AND stage NOT IN ('CIERRE/ GANADO', 'OPORTUNIDAD PERDIDA', 'CLIENTE RECURRENTE')
+              THEN COALESCE(expected_revenue, 0) ELSE 0 END) AS pipeline
      FROM leads WHERE customer != '' GROUP BY customer`,
   ).all() as { customer: string; opportunities: number; pipeline: number }[];
-  const equipment = db.prepare(
+  const equipment = await sql.prepare(
     `SELECT client_name AS customer, COUNT(*) AS comodatos FROM equipment WHERE client_name IS NOT NULL AND client_name != '' GROUP BY client_name`,
   ).all() as { customer: string; comodatos: number }[];
   const map = new Map<string, { customer: string; opportunities: number; pipeline: number; comodatos: number }>();
@@ -970,11 +883,12 @@ export function clientDirectory(db = getDb()) {
   return [...map.values()].sort((a, b) => b.pipeline - a.pipeline || a.customer.localeCompare(b.customer, "es"));
 }
 
-export function clientTimeline(customer: string, db = getDb()) {
-  const leads = db.prepare("SELECT * FROM leads WHERE customer = ?").all(customer) as LeadRecord[];
+export async function clientTimeline(customer: string, db?: unknown) {
+  const sql = await sqlOf(db);
+  const leads = await sql.prepare("SELECT * FROM leads WHERE customer = ?").all(customer) as LeadRecord[];
   const keys = leads.map((lead) => lead.import_key);
   const activities = keys.length
-    ? (db.prepare(`SELECT * FROM activities WHERE lead_import_key IN (${keys.map(() => "?").join(",")})`).all(...keys) as {
+    ? (await sql.prepare(`SELECT * FROM activities WHERE lead_import_key IN (${keys.map(() => "?").join(",")})`).all(...keys) as {
         activity_type: string;
         deadline: string | null;
         state: string;
@@ -984,7 +898,7 @@ export function clientTimeline(customer: string, db = getDb()) {
         document_name: string;
       }[])
     : [];
-  const equipment = db.prepare("SELECT * FROM equipment WHERE client_name = ?").all(customer) as EquipmentRow[];
+  const equipment = await sql.prepare("SELECT * FROM equipment WHERE client_name = ?").all(customer) as EquipmentRow[];
   const events: { at: string; kind: string; title: string; detail: string }[] = [];
   for (const lead of leads) {
     events.push({
@@ -1010,7 +924,7 @@ export function clientTimeline(customer: string, db = getDb()) {
       detail: `${item.serial} · ${item.status}`,
     });
   }
-  const doc = currentCommittee(db).doc;
+  const doc = (await currentCommittee(db)).doc;
   for (const topic of doc.topics) {
     for (const punto of topic.puntos) {
       const linked = [punto.leadImportKey, ...punto.pendientes.map((item) => item.leadImportKey)].filter(Boolean);
@@ -1032,7 +946,7 @@ export function clientTimeline(customer: string, db = getDb()) {
   return { customer, leads, equipment, events };
 }
 
-export function costFor(row: EquipmentRow, rate = hourlyRate()): ReturnType<typeof maintenanceCost> {
+export function costFor(row: EquipmentRow, rate: number): ReturnType<typeof maintenanceCost> {
   return maintenanceCost({
     everyDays: row.maintenance_every_days,
     hoursMin: row.hours_min,

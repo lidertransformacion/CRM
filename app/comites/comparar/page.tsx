@@ -6,7 +6,7 @@ export const dynamic = "force-dynamic";
 
 export default async function ComparePage({ searchParams }: { searchParams: Promise<{ left?: string; right?: string }> }) {
   const params = await searchParams;
-  const data = compareCommittees(Number(params.left || 1), Number(params.right || 7));
+  const data = await compareCommittees(Number(params.left || 1), Number(params.right || 7));
   return (
     <main className="mx-auto max-w-5xl space-y-6 px-4 py-6">
       <div className="flex items-end justify-between gap-3">

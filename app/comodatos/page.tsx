@@ -3,18 +3,21 @@ import { catalogValues, hourlyRate, listEquipment } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
 
-export default function ComodatosPage() {
+export default async function ComodatosPage() {
+  const [initial, rate, categories, clients, cities, suppliers, salespeople] = await Promise.all([
+    listEquipment(),
+    hourlyRate(),
+    catalogValues("category"),
+    catalogValues("client"),
+    catalogValues("city"),
+    catalogValues("supplier"),
+    catalogValues("salesperson"),
+  ]);
   return (
     <EquipmentDesk
-      initial={listEquipment()}
-      hourlyRate={hourlyRate()}
-      lists={{
-        categories: catalogValues("category"),
-        clients: catalogValues("client"),
-        cities: catalogValues("city"),
-        suppliers: catalogValues("supplier"),
-        salespeople: catalogValues("salesperson"),
-      }}
+      initial={initial}
+      hourlyRate={rate}
+      lists={{ categories, clients, cities, suppliers, salespeople }}
     />
   );
 }

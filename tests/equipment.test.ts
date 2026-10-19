@@ -10,10 +10,10 @@ import { getSheetsAdapter } from "@/lib/sheets/adapter";
 import { planPush } from "@/lib/sheets/diff";
 import { FORMULA_HEADERS } from "@/lib/sheets/types";
 
-function tempDb() {
+async function tempDb() {
   const file = path.join(os.tmpdir(), `crm-eq-${Date.now()}-${Math.random().toString(16).slice(2)}.sqlite`);
-  const db = openDatabase(file);
-  seedIfEmpty(db);
+  const db = await openDatabase(file);
+  await seedIfEmpty(db);
   return { file, db };
 }
 
@@ -23,10 +23,10 @@ describe("equipment seed", () => {
     for (const file of created) fs.rmSync(file, { force: true });
   });
 
-  it("loads 224 equipment keyed by serial and computes store codes", () => {
-    const { file, db } = tempDb();
+  it("loads 224 equipment keyed by serial and computes store codes", async () => {
+    const { file, db } = await tempDb();
     created.push(file);
-    const rows = listEquipment(db);
+    const rows = await listEquipment(db);
     expect(rows).toHaveLength(224);
     expect(new Set(rows.map((row) => row.serial)).size).toBe(224);
     expect(new Set(rows.map((row) => row.asset_number)).size).toBe(224);
@@ -56,16 +56,16 @@ describe("equipment seed", () => {
     expect(splitLocation("Hoteles Estelar - Intercontinental Cali Avenida Colombia #2-72").city).toBe("Cali");
   });
 
-  it("creates and edits an equipment with history, a new asset number and the next store code", () => {
-    const { file, db } = tempDb();
+  it("creates and edits an equipment with history, a new asset number and the next store code", async () => {
+    const { file, db } = await tempDb();
     created.push(file);
-    const createdRow = createEquipment(
+    const createdRow = await createEquipment(
       { serial: "TEST-001", name: "Molinillo de prueba", category: "Molino de café", siteId: "COM", clientName: "La Artesa SAS", status: "en_comodato" },
       db,
     );
     expect(createdRow.asset_number).toBe("ACT-0225");
     expect(createdRow.store_code).toBe("COM-039");
-    const moved = updateEquipment(
+    const moved = await updateEquipment(
       "TEST-001",
       {
         serial: "TEST-001",
@@ -85,10 +85,10 @@ describe("equipment seed", () => {
     const history = db.prepare("SELECT field FROM equipment_history WHERE serial = ?").all("TEST-001") as { field: string }[];
     expect(history.map((row) => row.field)).toContain("site");
     expect(history.map((row) => row.field)).toContain("client");
-    addMaintenance("TEST-001", { performedOn: "2026-10-15", kind: "preventivo", hours: 2, partsCost: 10000, technician: "Taller", notes: "Cambio de empaque", conditionAfter: "Operativo" }, db);
+    await addMaintenance("TEST-001", { performedOn: "2026-10-15", kind: "preventivo", hours: 2, partsCost: 10000, technician: "Taller", notes: "Cambio de empaque", conditionAfter: "Operativo" }, db);
     const log = db.prepare("SELECT visit_cost FROM maintenance_logs WHERE serial = ?").get("TEST-001") as { visit_cost: number };
     expect(log.visit_cost).toBe(2 * 50000 + 10000);
-    expect(getEquipment("TEST-001", db)?.salesperson).toBe("DIAZ BARRERA, ALEJANDRO");
+    expect((await getEquipment("TEST-001", db))?.salesperson).toBe("DIAZ BARRERA, ALEJANDRO");
   });
 });
 
@@ -109,9 +109,9 @@ describe("google sheets adapter", () => {
     expect(fetchSpy).not.toHaveBeenCalled();
     fetchSpy.mockRestore();
 
-    const { file, db } = tempDb();
+    const { file, db } = await tempDb();
     created.push(file);
-    const plans = sheetPlans(db);
+    const plans = await sheetPlans(db);
     expect(plans.mode).toBe("dry-run");
     expect(plans.push.deletes).toEqual([]);
     expect(plans.push.updates).toEqual([]);
@@ -120,10 +120,10 @@ describe("google sheets adapter", () => {
     expect(plans.pull.updates).toEqual([]);
   });
 
-  it("writes a diff by serial and skips formula columns", () => {
-    const { file, db } = tempDb();
+  it("writes a diff by serial and skips formula columns", async () => {
+    const { file, db } = await tempDb();
     created.push(file);
-    updateEquipment(
+    await updateEquipment(
       "C24001551",
       {
         serial: "C24001551",
@@ -134,7 +134,7 @@ describe("google sheets adapter", () => {
       },
       db,
     );
-    const plans = sheetPlans(db);
+    const plans = await sheetPlans(db);
     expect(plans.push.inserts).toEqual([]);
     expect(plans.push.deletes).toEqual([]);
     const update = plans.push.updates.find((row) => row.serial === "C24001551");
@@ -142,7 +142,7 @@ describe("google sheets adapter", () => {
     expect(update?.changes.map((change) => change.column)).toContain("Nombre del equipo");
     expect(update?.changes.some((change) => FORMULA_HEADERS.has(change.column))).toBe(false);
     const moved = planPush(
-      listEquipment(db).map((row) => {
+      (await listEquipment(db)).map((row) => {
         const sync = {
           serial: row.serial,
           sheetSerial: row.sheet_serial,

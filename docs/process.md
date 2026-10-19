@@ -58,14 +58,16 @@ Activities attach to a lead by document name, then by name plus salesperson. Som
 
 ## KPIs
 
-Classification is by stage, not by the Ganado column in the export:
+Classification follows Odoo `active` and `won_status`. Stage is the fallback only while the status is still Pendiente. A local stage edit does not change `won_status` or `active`.
 
-- Open: stages 1–6 (291)
-- Won: CIERRE/ GANADO (185)
-- Lost: OPORTUNIDAD PERDIDA (183)
-- Recurrente: CLIENTE RECURRENTE (40), excluded from the win rate
+On the 15 Oct 2026 export:
 
-Win rate is won / (won + lost) = 185 / 368. Expected revenue is the sum of ingreso esperado on open stages. Weighted revenue multiplies that by probability / 100.
+- Open: 169
+- Won: 182 (Ganado, including one lead that is still in an open stage)
+- Lost: 309 (Perdido, inactive, or stage OPORTUNIDAD PERDIDA)
+- Recurrente: 39, excluded from the win rate
+
+Win rate is won / (won + lost) = 182 / 491. Expected revenue sums ingreso esperado on open leads only (about 302.9 million COP). Leads with null or zero expected revenue are counted as missing revenue (96 open leads in this export). Weighted revenue multiplies that by probability / 100.
 
 Stage age is days since `created_at`. The export has no stage-entry date, so the board says so. It is not time-in-stage.
 

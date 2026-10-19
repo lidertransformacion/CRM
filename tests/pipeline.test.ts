@@ -7,9 +7,9 @@ import { importOdooFiles, kpiData, openDatabase, seedIfEmpty, xlsxAdapter } from
 import { OdooSyncAdapter } from "@/lib/odoo/adapter";
 import { defaultOdooPaths } from "@/lib/db";
 
-function tempDb() {
+async function tempDb() {
   const file = path.join(os.tmpdir(), `crm-pay-line-${Date.now()}-${Math.random().toString(16).slice(2)}.sqlite`);
-  const db = openDatabase(file);
+  const db = await openDatabase(file);
   return { file, db };
 }
 
@@ -20,10 +20,10 @@ describe("odoo import and kpis", () => {
     created.length = 0;
   });
 
-  it("imports the production export and computes kpis from it", () => {
-    const { file, db } = tempDb();
+  it("imports the production export and computes kpis from it", async () => {
+    const { file, db } = await tempDb();
     created.push(file);
-    seedIfEmpty(db);
+    await seedIfEmpty(db);
     const stages = db.prepare("SELECT stage, COUNT(*) AS n FROM leads GROUP BY stage").all() as { stage: string; n: number }[];
     const counts = Object.fromEntries(stages.map((row) => [row.stage, row.n]));
     expect(db.prepare("SELECT COUNT(*) AS n FROM leads").get()).toEqual({ n: 699 });
@@ -41,25 +41,26 @@ describe("odoo import and kpis", () => {
     const linked = db.prepare("SELECT COUNT(*) AS n FROM activities WHERE lead_import_key IS NOT NULL").get() as { n: number };
     expect(linked.n).toBeGreaterThan(60);
 
-    const kpis = kpiData("2026-10-15", db);
-    expect(kpis.team.open).toBe(291);
-    expect(kpis.team.won).toBe(185);
-    expect(kpis.team.lost).toBe(183);
-    expect(kpis.team.recurrente).toBe(40);
-    expect(kpis.team.winRate).toBeCloseTo(185 / 368, 5);
+    const kpis = await kpiData("2026-10-15", db);
+    expect(kpis.team.open).toBe(169);
+    expect(kpis.team.won).toBe(182);
+    expect(kpis.team.lost).toBe(309);
+    expect(kpis.team.recurrente).toBe(39);
+    expect(kpis.team.winRate).toBeCloseTo(182 / 491, 5);
+    expect(kpis.team.expectedRevenue).toBeCloseTo(302922639.78, 0);
+    expect(kpis.team.missingRevenue).toBe(96);
     expect(kpis.team.overdueActivities).toBe(72);
-    expect(kpis.team.expectedRevenue).toBeGreaterThan(0);
     expect(kpis.people.length).toBe(14);
     expect(kpis.targets).toEqual([]);
   });
 
-  it("reapplies local lead edits after a fresh import", () => {
-    const { file, db } = tempDb();
+  it("reapplies local lead edits after a fresh import", async () => {
+    const { file, db } = await tempDb();
     created.push(file);
-    importOdooFiles(db, defaultOdooPaths());
+    await importOdooFiles(db, defaultOdooPaths());
     const lead = db.prepare("SELECT import_key, stage FROM leads LIMIT 1").get() as { import_key: string; stage: string };
     db.prepare("INSERT INTO lead_edits (import_key, patch_json) VALUES (?, ?)").run(lead.import_key, JSON.stringify({ stage: "NEGOCIACIÓN" }));
-    importOdooFiles(db, defaultOdooPaths());
+    await importOdooFiles(db, defaultOdooPaths());
     const again = db.prepare("SELECT stage, edited_locally FROM leads WHERE import_key = ?").get(lead.import_key) as {
       stage: string;
       edited_locally: number;

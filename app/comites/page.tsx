@@ -3,9 +3,9 @@ import { committeeHistory, currentCommittee } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
 
-export default function ComitesPage() {
-  const { doc } = currentCommittee();
-  const history = committeeHistory().map((item) => ({
+export default async function ComitesPage() {
+  const { doc } = await currentCommittee();
+  const history = (await committeeHistory()).map((item) => ({
     number: item.number,
     held_on: item.held_on,
     is_current: item.is_current,

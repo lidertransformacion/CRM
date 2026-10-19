@@ -3,6 +3,6 @@ import { clientDirectory } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
 
-export default function ClientesPage() {
-  return <ClientExplorer clients={clientDirectory()} />;
+export default async function ClientesPage() {
+  return <ClientExplorer clients={await clientDirectory()} />;
 }

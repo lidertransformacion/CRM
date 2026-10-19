@@ -13,11 +13,11 @@ export const dynamic = "force-dynamic";
 export default async function LifeSheet({ params }: { params: Promise<{ serial: string }> }) {
   const { serial } = await params;
   const decoded = decodeURIComponent(serial);
-  const equipment = getEquipment(decoded);
+  const equipment = await getEquipment(decoded);
   if (!equipment) notFound();
-  const history = equipmentHistory(decoded);
-  const logs = maintenanceLogs(decoded);
-  const rate = hourlyRate();
+  const history = await equipmentHistory(decoded);
+  const logs = await maintenanceLogs(decoded);
+  const rate = await hourlyRate();
   const cost = costFor(equipment, rate);
   const headerList = await headers();
   const host = headerList.get("x-forwarded-host") || headerList.get("host") || "127.0.0.1";

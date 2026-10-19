@@ -3,6 +3,6 @@ import { listLeads } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
 
-export default function PipelinePage() {
-  return <Kanban initial={listLeads()} />;
+export default async function PipelinePage() {
+  return <Kanban initial={await listLeads()} />;
 }

@@ -3,12 +3,11 @@ import { currentCommittee } from "@/lib/db";
 import { committeeCsv } from "@/lib/committee/email";
 import { todayIso } from "@/lib/utils";
 
-export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-export function GET(request: Request) {
+export async function GET(request: Request) {
   const format = new URL(request.url).searchParams.get("format");
-  const doc = currentCommittee().doc;
+  const doc = (await currentCommittee()).doc;
   if (format === "csv") {
     return new NextResponse(committeeCsv(doc, todayIso()), {
       headers: {
