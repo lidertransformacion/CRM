@@ -9,7 +9,7 @@ import { sendGmail } from "@/lib/mail/gmail";
 import { DEFAULT_FROM_ADDRESS, DEFAULT_FROM_NAME, fromIdentity, rfc822 } from "@/lib/mail/message";
 import { enqueueEmail, processOutbox } from "@/lib/mail/outbox";
 import { OdooSyncAdapter } from "@/lib/odoo/adapter";
-import { commitSnapshot, ingestSnapshot } from "@/lib/odoo/ingest";
+import { commitSnapshot, ingestSnapshot, normalizeLabel } from "@/lib/odoo/ingest";
 import { canonicalStage } from "@/lib/odoo/stages";
 import { acknowledgeOutbound, queueOutbound } from "@/lib/odoo/outbound";
 import { googleAccessToken, signServiceAccountJwt } from "@/lib/sheets/live";
@@ -311,6 +311,99 @@ describe("odoo browser agent", () => {
     expect(result.errors[0]?.message).toMatch(/No se enlazó/);
     expect(await db.get<{ n: number }>("SELECT COUNT(*) AS n FROM leads WHERE odoo_id IS NULL OR odoo_id = ''")).toMatchObject({ n: 2 });
     expect((await db.get<{ import_key: string }>("SELECT import_key FROM leads WHERE odoo_id = ?", ["50"]))?.import_key).toBe("odoo:50");
+    expect(result.summary.ambiguous).toHaveLength(1);
+    expect(result.summary.ambiguous[0]?.candidates).toHaveLength(2);
+    expect(result.summary.linked).toBe(0);
+  });
+
+  it("links Oportunidad de FEMSA to FEMSA and leaves an unmatched row out of the link", async () => {
+    expect(normalizeLabel("Oportunidad de FEMSA")).toBe(normalizeLabel("FEMSA"));
+    expect(normalizeLabel("Oportunidad de Café Bogotá S.A.S.")).toBe("cafebogotasas");
+    const { db } = await tempSql();
+    await db.run(
+      `INSERT INTO leads (import_key, name, stage, customer, created_at, active, tags) VALUES ('excel:femsa', 'Oportunidad de FEMSA', 'LEAD', 'FEMSA', '2026-06-17T15:54:00', 1, '')`,
+    );
+    await db.run(
+      `INSERT INTO leads (import_key, name, stage, customer, created_at, active, tags) VALUES ('excel:keralty', 'Oportunidad de KERALTY S.A.S.', 'LEAD', 'KERALTY S.A.S.', '2026-09-15T15:54:00', 1, '')`,
+    );
+    await db.run(`INSERT INTO leads (import_key, name, stage, customer, created_at, active, tags) VALUES ('excel:hotel', 'HOTEL W', 'LEAD', '', '2026-09-01', 1, '')`);
+    const preview = await ingestSnapshot(db, {
+      mode: "full",
+      dryRun: true,
+      leads: [
+        { id: 7, name: "FEMSA", customer: "FEMSA", createdAt: "2019-01-01", stage: "LEAD", active: true },
+        { id: 8, name: "keralty sas", partner: "KERALTY SAS", stage: "NEGOCIACION", active: true },
+      ],
+    });
+    expect(preview).toMatchObject({ wouldLink: 2, wouldInsert: 0, wouldArchive: 1, linked: 0, inserted: 0, archived: 0 });
+    expect(preview.summary).toMatchObject({ linked: 2, ambiguousCount: 0, unlinkedCount: 1 });
+    expect(preview.summary.unlinked).toEqual([{ importKey: "excel:hotel", name: "HOTEL W", customer: "" }]);
+    expect(preview.summary.ambiguous).toEqual([]);
+    expect((await db.get<{ odoo_id: string | null }>("SELECT odoo_id FROM leads WHERE import_key = 'excel:femsa'"))?.odoo_id ?? null).toBeNull();
+
+    const live = await ingestSnapshot(db, {
+      mode: "full",
+      snapshotId: "odoo-femsa",
+      leads: [
+        { id: 7, name: "FEMSA", customer: "FEMSA", createdAt: "2019-01-01", stage: "LEAD", active: true },
+        { id: 8, name: "keralty sas", partner: "KERALTY SAS", stage: "negociacion", active: true },
+      ],
+    });
+    expect(live).toMatchObject({ linked: 2, inserted: 0, archived: 0 });
+    expect(await db.get<{ odoo_id: string; import_key: string; active: number }>("SELECT odoo_id, import_key, active FROM leads WHERE import_key = 'excel:femsa'")).toMatchObject({
+      odoo_id: "7",
+      import_key: "excel:femsa",
+      active: 1,
+    });
+    expect(await db.get<{ odoo_id: string; stage: string }>("SELECT odoo_id, stage FROM leads WHERE import_key = 'excel:keralty'")).toMatchObject({
+      odoo_id: "8",
+      stage: "NEGOCIACIÓN",
+    });
+    expect(await db.get<{ n: number }>("SELECT COUNT(*) AS n FROM leads")).toMatchObject({ n: 3 });
+    const committed = await commitSnapshot(db, { snapshotId: "odoo-femsa" });
+    expect(committed).toMatchObject({ seen: 2, archived: 1 });
+    expect(await db.get<{ active: number; odoo_id: string }>("SELECT active, odoo_id FROM leads WHERE import_key = 'excel:femsa'")).toMatchObject({ active: 1, odoo_id: "7" });
+    expect(await db.get<{ active: number; missing_from_odoo: number }>("SELECT active, missing_from_odoo FROM leads WHERE import_key = 'excel:hotel'")).toMatchObject({
+      active: 0,
+      missing_from_odoo: 1,
+    });
+  });
+
+  it("does not auto-link when several FEMSA rows match, and reports them", async () => {
+    const { db } = await tempSql();
+    await db.run(`INSERT INTO leads (import_key, name, stage, customer, created_at, active) VALUES ('excel:a', 'Oportunidad de FEMSA', 'LEAD', 'FEMSA', '2024-01-01', 1)`);
+    await db.run(`INSERT INTO leads (import_key, name, stage, customer, created_at, active) VALUES ('excel:b', 'FEMSA', 'LEAD', 'FEMSA', '2024-06-01', 1)`);
+    const preview = await ingestSnapshot(db, {
+      mode: "full",
+      dryRun: true,
+      leads: [{ id: 7, name: "Oportunidad de FEMSA", customer: "FEMSA", stage: "LEAD", active: true }],
+    });
+    expect(preview).toMatchObject({ wouldLink: 0, wouldInsert: 1, linked: 0 });
+    expect(preview.summary.ambiguousCount).toBe(1);
+    expect(preview.summary.ambiguous[0]?.candidates.map((row) => row.importKey).sort()).toEqual(["excel:a", "excel:b"]);
+    expect(preview.summary.unlinked.map((row) => row.importKey).sort()).toEqual(["excel:a", "excel:b"]);
+    expect(await db.get<{ n: number }>("SELECT COUNT(*) AS n FROM leads")).toMatchObject({ n: 2 });
+  });
+
+  it("links by email or NIT when the names differ", async () => {
+    const { db } = await tempSql();
+    await db.run(
+      `INSERT INTO leads (import_key, name, stage, customer, created_at, active, tags) VALUES ('excel:mail', 'Habitaciones y Desayunos Hoteles Estelar', 'LEAD', 'miguel.diez@hotelesestelar.com', '2024-02-01', 1, 'Hoteles')`,
+    );
+    await db.run(
+      `INSERT INTO leads (import_key, name, stage, customer, created_at, active, tags) VALUES ('excel:nit', 'INNOMATIK SAS  Nit: 900791766-0', 'LEAD', 'INNOMATIK SAS', '2024-03-01', 1, '')`,
+    );
+    const linked = await ingestSnapshot(db, {
+      mode: "incremental",
+      leads: [
+        { id: 21, name: "Hoteles Estelar", customer: "Hoteles Estelar", email: "Miguel.Diez@HotelesEstelar.com", stage: "LEAD", active: true },
+        { id: 22, name: "Innomatik", customer: "Otro comercio", nit: "900791766", stage: "LEAD", active: true },
+      ],
+    });
+    expect(linked).toMatchObject({ linked: 2, inserted: 0 });
+    expect(await db.get<{ odoo_id: string }>("SELECT odoo_id FROM leads WHERE import_key = 'excel:mail'")).toMatchObject({ odoo_id: "21" });
+    expect(await db.get<{ odoo_id: string }>("SELECT odoo_id FROM leads WHERE import_key = 'excel:nit'")).toMatchObject({ odoo_id: "22" });
+    expect(await db.get<{ n: number }>("SELECT COUNT(*) AS n FROM leads")).toMatchObject({ n: 2 });
   });
 
   it("previews a full archive without writing it", async () => {
