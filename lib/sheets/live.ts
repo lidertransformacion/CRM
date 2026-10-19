@@ -1,4 +1,5 @@
 import { createSign } from "node:crypto";
+import { readEnvSync } from "@/lib/env";
 import { planPull, planPush } from "@/lib/sheets/diff";
 import type { ApplyResult, EquipmentSyncRow, PullPlan, PushPlan, SheetSnapshot } from "@/lib/sheets/types";
 import type { SheetsAdapter } from "@/lib/sheets/adapter";
@@ -11,17 +12,17 @@ type LiveConfig = {
 };
 
 function requireEnabled() {
-  if (process.env.SHEETS_SYNC_ENABLED !== "true") {
+  if (readEnvSync("SHEETS_SYNC_ENABLED") !== "true") {
     throw new Error("Google Sheets sync is disabled.");
   }
 }
 
 export function readSheetsConfig(): LiveConfig {
   requireEnabled();
-  const clientEmail = process.env.GOOGLE_SHEETS_CLIENT_EMAIL?.trim() ?? "";
-  const privateKey = (process.env.GOOGLE_SHEETS_PRIVATE_KEY ?? "").replace(/\\n/g, "\n");
-  const spreadsheetId = process.env.GOOGLE_SHEETS_SPREADSHEET_ID?.trim() ?? "";
-  const tabName = process.env.GOOGLE_SHEETS_TAB?.trim() || "Listado Equipos";
+  const clientEmail = readEnvSync("GOOGLE_SHEETS_CLIENT_EMAIL").trim();
+  const privateKey = readEnvSync("GOOGLE_SHEETS_PRIVATE_KEY").replace(/\\n/g, "\n");
+  const spreadsheetId = readEnvSync("GOOGLE_SHEETS_SPREADSHEET_ID").trim();
+  const tabName = readEnvSync("GOOGLE_SHEETS_TAB").trim() || "Listado Equipos";
   if (!clientEmail || !privateKey || !spreadsheetId) {
     throw new Error("Faltan GOOGLE_SHEETS_CLIENT_EMAIL, GOOGLE_SHEETS_PRIVATE_KEY o GOOGLE_SHEETS_SPREADSHEET_ID.");
   }

@@ -4,7 +4,9 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { NextRequest } from "next/server";
 import { BOOTSTRAP_ADMIN_EMAIL, isLibertarioEmail } from "@/lib/auth/email";
-import { createUser, ensureBootstrapAdmin, HttpError } from "@/lib/auth/users";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { BOOTSTRAP_ERROR, authenticate, createUser, ensureBootstrapAdmin, HttpError, resetUserPassword } from "@/lib/auth/users";
 import { SESSION_COOKIE, signSession } from "@/lib/auth/session";
 import { openDatabase } from "@/lib/db";
 import { wrapDatabaseSync } from "@/lib/sql/node";
@@ -63,7 +65,16 @@ describe("bootstrap admin", () => {
     expect(await db.get("SELECT COUNT(*) AS n FROM users")).toEqual({ n: 0 });
 
     process.env.BOOTSTRAP_ADMIN_PASSWORD = "short-pass";
-    await expect(ensureBootstrapAdmin(db)).rejects.toThrow(/12/);
+    await expect(ensureBootstrapAdmin(db)).rejects.toThrow(BOOTSTRAP_ERROR);
+    try {
+      await ensureBootstrapAdmin(db);
+      throw new Error("expected bootstrap to fail");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      expect(message).toBe(BOOTSTRAP_ERROR);
+      expect(message).not.toContain("short-pass");
+      expect(message).not.toMatch(/12|caracteres|BOOTSTRAP/);
+    }
 
     process.env.BOOTSTRAP_ADMIN_PASSWORD = "correct-horse-battery";
     await ensureBootstrapAdmin(db);
@@ -73,6 +84,67 @@ describe("bootstrap admin", () => {
     );
     expect(user).toEqual({ email: BOOTSTRAP_ADMIN_EMAIL, role: "admin", must_change_password: 1 });
     expect(await db.get("SELECT COUNT(*) AS n FROM users")).toEqual({ n: 1 });
+  });
+
+  it("trims the bootstrap secret and the typed password the same way", async () => {
+    const { file, db } = await tempSql();
+    created.push(file);
+    process.env.BOOTSTRAP_ADMIN_PASSWORD = "  correct-horse-battery\n";
+    await ensureBootstrapAdmin(db);
+    const user = await authenticate(db, `  ${BOOTSTRAP_ADMIN_EMAIL}  `, "  correct-horse-battery  ");
+    expect(user.email).toBe(BOOTSTRAP_ADMIN_EMAIL);
+    await expect(authenticate(db, BOOTSTRAP_ADMIN_EMAIL, "correct-horse-battery-no")).rejects.toMatchObject({ status: 401 });
+  });
+
+  it("leaves an existing admin in place when the bootstrap secret changes", async () => {
+    const { file, db } = await tempSql();
+    created.push(file);
+    process.env.BOOTSTRAP_ADMIN_PASSWORD = "correct-horse-battery";
+    await ensureBootstrapAdmin(db);
+    const before = await db.get<{ password_hash: string }>("SELECT password_hash FROM users");
+    process.env.BOOTSTRAP_ADMIN_PASSWORD = "a-different-secret-value";
+    await ensureBootstrapAdmin(db);
+    const after = await db.get<{ password_hash: string }>("SELECT password_hash FROM users");
+    expect(after).toEqual(before);
+    await expect(authenticate(db, BOOTSTRAP_ADMIN_EMAIL, "a-different-secret-value")).rejects.toMatchObject({ status: 401 });
+    await authenticate(db, BOOTSTRAP_ADMIN_EMAIL, "correct-horse-battery");
+  });
+
+  it("lets an admin set a temporary password that must be changed", async () => {
+    const { file, db } = await tempSql();
+    created.push(file);
+    process.env.BOOTSTRAP_ADMIN_PASSWORD = "correct-horse-battery";
+    await ensureBootstrapAdmin(db);
+    await expect(resetUserPassword(db, { role: "user" }, { email: BOOTSTRAP_ADMIN_EMAIL, password: "temporary-password" })).rejects.toMatchObject({
+      status: 403,
+    });
+    const reset = await resetUserPassword(db, { role: "admin" }, { email: BOOTSTRAP_ADMIN_EMAIL, password: "  temporary-password  " });
+    expect(reset).toEqual({ email: BOOTSTRAP_ADMIN_EMAIL, sessionVersion: 2 });
+    const row = await db.get<{ must_change_password: number; session_version: number }>(
+      "SELECT must_change_password, session_version FROM users WHERE email = ?",
+      [BOOTSTRAP_ADMIN_EMAIL],
+    );
+    expect(row).toEqual({ must_change_password: 1, session_version: 2 });
+    await expect(authenticate(db, BOOTSTRAP_ADMIN_EMAIL, "correct-horse-battery")).rejects.toMatchObject({ status: 401 });
+    const user = await authenticate(db, BOOTSTRAP_ADMIN_EMAIL, "temporary-password");
+    expect(user.must_change_password).toBe(1);
+  });
+
+  it("recovers a password from the one-off script", async () => {
+    const { file, db } = await tempSql();
+    created.push(file);
+    process.env.BOOTSTRAP_ADMIN_PASSWORD = "correct-horse-battery";
+    await ensureBootstrapAdmin(db);
+    const exec = promisify(execFile);
+    const { stdout } = await exec("npx", ["tsx", "scripts/reset-password.ts", BOOTSTRAP_ADMIN_EMAIL, "script-temporary-password"], {
+      cwd: process.cwd(),
+      env: { ...process.env, CRM_DB_PATH: file },
+    });
+    expect(stdout).not.toContain("script-temporary-password");
+    expect(JSON.parse(stdout)).toMatchObject({ email: BOOTSTRAP_ADMIN_EMAIL, mustChangePassword: true, sessionVersion: 2 });
+    const row = await db.get<{ must_change_password: number }>("SELECT must_change_password FROM users WHERE email = ?", [BOOTSTRAP_ADMIN_EMAIL]);
+    expect(row?.must_change_password).toBe(1);
+    await authenticate(db, BOOTSTRAP_ADMIN_EMAIL, "script-temporary-password");
   });
 
   it("lets an admin create a company user and rejects everyone else", async () => {
@@ -97,6 +169,24 @@ describe("middleware", () => {
   afterEach(() => {
     if (previous == null) delete process.env.SESSION_SECRET;
     else process.env.SESSION_SECRET = previous;
+  });
+
+  it("serves brand files without a session", async () => {
+    process.env.SESSION_SECRET = SECRET;
+    const assets = [
+      "/favicon.png",
+      "/apple-touch-icon.png",
+      "/brand/logo-light.png",
+      "/icons/icon-192.png",
+      "/icons/icon-512.png",
+      "/icons/maskable-512.png",
+      "/manifest.webmanifest",
+    ];
+    for (const asset of assets) {
+      const response = await middleware(new NextRequest(`http://localhost${asset}`));
+      expect(response.headers.get("location"), asset).toBeNull();
+      expect(response.status, asset).toBe(200);
+    }
   });
 
   it("blocks every page and API except login", async () => {

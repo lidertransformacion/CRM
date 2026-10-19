@@ -10,7 +10,7 @@ export async function POST(request: Request) {
   try {
     const body = (await request.json()) as { email?: string; password?: string };
     const db = await getDb();
-    const user = await authenticate(db, body.email ?? "", body.password ?? "");
+    const user = await authenticate(db, (body.email ?? "").trim(), (body.password ?? "").trim());
     const token = await signSession({
       uid: user.id,
       email: user.email,

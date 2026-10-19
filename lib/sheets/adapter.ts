@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { readEnv } from "@/lib/env";
 import { snapshotFromCsv } from "@/lib/sheets/csv";
 import { planPull, planPush } from "@/lib/sheets/diff";
 import type { ApplyResult, EquipmentSyncRow, PullPlan, PushPlan, SheetSnapshot } from "@/lib/sheets/types";
@@ -46,16 +47,12 @@ export function loadBundledSnapshot(): SheetSnapshot {
   return snapshotFromCsv(text);
 }
 
-export function sheetsSyncEnabled(): boolean {
-  return process.env.SHEETS_SYNC_ENABLED === "true";
-}
-
 /**
  * Default adapter is always dry-run. The live client is constructed only when
  * SHEETS_SYNC_ENABLED=true, and even then it reads credentials from the environment.
  */
 export async function getSheetsAdapter(): Promise<SheetsAdapter> {
-  if (!sheetsSyncEnabled()) return new DryRunSheetsAdapter(loadBundledSnapshot());
+  if ((await readEnv("SHEETS_SYNC_ENABLED")) !== "true") return new DryRunSheetsAdapter(loadBundledSnapshot());
   const { LiveGoogleSheetsAdapter } = await import("@/lib/sheets/live");
   return new LiveGoogleSheetsAdapter();
 }

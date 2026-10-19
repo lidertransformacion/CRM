@@ -27,30 +27,42 @@ export class HttpError extends Error {
 
 const MIN_PASSWORD = 12;
 
+/** Shown when the bootstrap secret is missing, short, or rejected. Never includes the secret. */
+export const BOOTSTRAP_ERROR = "No se pudo preparar el acceso inicial.";
+
 export function assertPassword(password: string) {
   if (password.length < MIN_PASSWORD) {
     throw new HttpError(400, `La contraseña debe tener al menos ${MIN_PASSWORD} caracteres.`);
   }
 }
 
+/** Bootstrap stores the trimmed secret. Login and resets trim the same way. */
+export function normalizePassword(password: string): string {
+  return password.trim();
+}
+
 export async function ensureBootstrapAdmin(db: SqlDb): Promise<void> {
   const existing = await db.get<{ id: number }>("SELECT id FROM users WHERE email = ?", [BOOTSTRAP_ADMIN_EMAIL]);
   if (existing) return;
-  const password = (await readEnv("BOOTSTRAP_ADMIN_PASSWORD")).trim();
+  const password = normalizePassword(await readEnv("BOOTSTRAP_ADMIN_PASSWORD"));
   if (!password) return;
-  assertPassword(password);
-  const now = new Date().toISOString();
-  await db.run(
-    `INSERT INTO users (email, password_hash, role, must_change_password, email_opt_out, session_version, created_at, updated_at)
-     VALUES (?, ?, 'admin', 1, 0, 1, ?, ?)`,
-    [BOOTSTRAP_ADMIN_EMAIL, await hashPassword(password), now, now],
-  );
+  try {
+    if (password.length < MIN_PASSWORD) throw new Error("rejected");
+    const now = new Date().toISOString();
+    await db.run(
+      `INSERT INTO users (email, password_hash, role, must_change_password, email_opt_out, session_version, created_at, updated_at)
+       VALUES (?, ?, 'admin', 1, 0, 1, ?, ?)`,
+      [BOOTSTRAP_ADMIN_EMAIL, await hashPassword(password), now, now],
+    );
+  } catch {
+    throw new Error(BOOTSTRAP_ERROR);
+  }
 }
 
 export async function authenticate(db: SqlDb, email: string, password: string): Promise<UserRow> {
   const normalized = normalizeEmail(email);
   const user = await db.get<UserRow>("SELECT * FROM users WHERE email = ?", [normalized]);
-  if (!user || !(await verifyPassword(password, user.password_hash))) {
+  if (!user || !(await verifyPassword(normalizePassword(password), user.password_hash))) {
     throw new HttpError(401, "Correo o contraseña incorrectos.");
   }
   return user;
@@ -66,14 +78,15 @@ export async function createUser(
   if (!isLibertarioEmail(email)) {
     throw new HttpError(400, "El correo debe terminar exactamente en @libertariocoffee.com.");
   }
-  assertPassword(input.password ?? "");
+  const password = normalizePassword(input.password ?? "");
+  assertPassword(password);
   const role: Role = input.role === "admin" ? "admin" : "user";
   const now = new Date().toISOString();
   try {
     const result = await db.run(
       `INSERT INTO users (email, password_hash, role, must_change_password, email_opt_out, session_version, created_at, updated_at)
        VALUES (?, ?, ?, 1, 0, 1, ?, ?)`,
-      [email, await hashPassword(input.password), role, now, now],
+      [email, await hashPassword(password), role, now, now],
     );
     return { id: result.lastInsertRowid, email, role };
   } catch (error) {
@@ -84,18 +97,45 @@ export async function createUser(
 }
 
 export async function changePassword(db: SqlDb, userId: number, currentPassword: string, nextPassword: string): Promise<void> {
-  assertPassword(nextPassword);
+  const current = normalizePassword(currentPassword);
+  const next = normalizePassword(nextPassword);
+  assertPassword(next);
   const user = await db.get<UserRow>("SELECT * FROM users WHERE id = ?", [userId]);
   if (!user) throw new HttpError(401, "unauthorized");
-  if (!(await verifyPassword(currentPassword, user.password_hash))) {
+  if (!(await verifyPassword(current, user.password_hash))) {
     throw new HttpError(400, "La contraseña actual no coincide.");
   }
-  if (currentPassword === nextPassword) throw new HttpError(400, "Elige una contraseña distinta.");
+  if (current === next) throw new HttpError(400, "Elige una contraseña distinta.");
   const now = new Date().toISOString();
   await db.run(
     `UPDATE users SET password_hash = ?, must_change_password = 0, session_version = session_version + 1, updated_at = ? WHERE id = ?`,
-    [await hashPassword(nextPassword), now, userId],
+    [await hashPassword(next), now, userId],
   );
+}
+
+/** Sets a temporary password and forces a change. Does not rotate an existing admin when the bootstrap secret changes. */
+export async function setTemporaryPassword(db: SqlDb, email: string, password: string): Promise<{ email: string; sessionVersion: number }> {
+  const normalized = normalizeEmail(email);
+  const next = normalizePassword(password);
+  assertPassword(next);
+  const user = await db.get<UserRow>("SELECT * FROM users WHERE email = ?", [normalized]);
+  if (!user) throw new HttpError(404, "No hay un usuario con ese correo.");
+  const now = new Date().toISOString();
+  await db.run(
+    `UPDATE users SET password_hash = ?, must_change_password = 1, session_version = session_version + 1, updated_at = ? WHERE id = ?`,
+    [await hashPassword(next), now, user.id],
+  );
+  const saved = await db.get<{ session_version: number }>("SELECT session_version FROM users WHERE id = ?", [user.id]);
+  return { email: normalized, sessionVersion: Number(saved?.session_version ?? user.session_version + 1) };
+}
+
+export async function resetUserPassword(
+  db: SqlDb,
+  actor: { role: Role },
+  input: { email: string; password: string },
+): Promise<{ email: string; sessionVersion: number }> {
+  if (actor.role !== "admin") throw new HttpError(403, "Solo un administrador puede restablecer contraseñas.");
+  return setTemporaryPassword(db, input.email, input.password);
 }
 
 export async function setEmailOptOut(db: SqlDb, userId: number, optOut: boolean): Promise<void> {

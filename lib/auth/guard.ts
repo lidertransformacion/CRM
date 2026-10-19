@@ -8,6 +8,18 @@ export function isPublicPath(pathname: string): boolean {
   return pathname === "/login" || pathname === "/api/auth/login";
 }
 
+/** Brand files must load on the login page before a session exists. */
+export function isStaticAsset(pathname: string): boolean {
+  return (
+    pathname === "/favicon.png" ||
+    pathname === "/favicon.ico" ||
+    pathname === "/apple-touch-icon.png" ||
+    pathname === "/manifest.webmanifest" ||
+    pathname.startsWith("/icons/") ||
+    pathname.startsWith("/brand/")
+  );
+}
+
 export function allowsDuringPasswordChange(pathname: string): boolean {
   return pathname === "/cuenta" || pathname === "/api/auth/password" || pathname === "/api/auth/logout" || pathname === "/login";
 }

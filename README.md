@@ -23,7 +23,7 @@ npm test
 npm run dev
 ```
 
-Open [http://127.0.0.1:4317](http://127.0.0.1:4317). The first request creates `data/crm.sqlite` and seeds it from `data/imports/`. Sign in as `lidertransformacion@libertariocoffee.com` with `BOOTSTRAP_ADMIN_PASSWORD`, then change that password on `/cuenta`.
+Open [http://127.0.0.1:4317](http://127.0.0.1:4317). The first request creates `data/crm.sqlite` and advances one seed batch. Run `npm run seed` to finish the snapshot. Sign in as `lidertransformacion@libertariocoffee.com` with `BOOTSTRAP_ADMIN_PASSWORD`, then change that password on `/cuenta`.
 
 `npm run dev:worker` starts the Vite/Workers dev server on the same port and uses D1 local state when Wrangler is configured. `npm run build` is the Cloudflare build (`vite build`).
 
@@ -34,6 +34,7 @@ Open [http://127.0.0.1:4317](http://127.0.0.1:4317). The first request creates `
 | `npm test` | Vitest |
 | `npm run build` | Production bundle for Cloudflare Workers |
 | `npm run import:odoo` | Reimport the three Odoo `.xlsx` files and reapply local lead edits |
+| `npm run reset-password -- email 'temporary'` | One-off recovery: set a temporary password with `must_change_password` |
 
 ## Authentication
 
@@ -42,7 +43,10 @@ Every page and API route requires a signed `crm_session` cookie. Public routes a
 - Roles are `admin` and `user`.
 - Only an admin can create users, and only for emails that end exactly in `@libertariocoffee.com` (one `@`, no subdomain, case-insensitive).
 - The first admin is always `lidertransformacion@libertariocoffee.com`. It is inserted on boot when `BOOTSTRAP_ADMIN_PASSWORD` is set, with `must_change_password`. There is no password in the repo.
+- Changing `BOOTSTRAP_ADMIN_PASSWORD` after that user exists does not rotate the password.
+- An admin can set a temporary password from Ajustes, or `POST /api/users/reset` with `{ "email", "password" }`. The account must change it on `/cuenta`, and its previous sessions stop working.
 - Until that password is changed, other pages redirect to `/cuenta` and other APIs return 403.
+- Each request reads secrets from the Workers env binding. A value left on `process.env` does not hide a newer binding. Setup runs one seed batch and the bootstrap check on every request, not once per isolate.
 
 ## Cloudflare deploy
 
@@ -74,7 +78,15 @@ npm run build
 npx wrangler deploy
 ```
 
-The first request after deploy seeds D1 from the bundled `data/imports` snapshot (leads, activities, teams, equipment, suppliers) and creates the bootstrap admin.
+The first request after deploy advances a single D1 batch and creates the bootstrap admin. Later requests keep advancing one batch until the snapshot is complete; the Worker does not remember a finished setup promise. Finish it as an admin by repeating `POST /api/admin/seed` until the JSON `complete` field is true, or run `npm run seed` against a local database. Each call is idempotent. A partial equipment load inserts the missing serials and leaves existing leads in place. The bundled snapshot has 699 leads, 72 activities, 32 teams, and 224 equipment. A bad `BOOTSTRAP_ADMIN_PASSWORD` returns only "No se pudo preparar el acceso inicial."
+
+If nobody can sign in, recover without editing SQL. The command sets a temporary password, forces a change on `/cuenta`, and revokes existing sessions. It does not print the password. Point `CRM_DB_PATH` at the database file when it is not `data/crm.sqlite`.
+
+```bash
+npm run reset-password -- lidertransformacion@libertariocoffee.com 'temporary-password'
+```
+
+On the live Worker, a signed-in admin uses Ajustes or `POST /api/users/reset` instead. Rotating the `BOOTSTRAP_ADMIN_PASSWORD` secret does not change an admin that already exists.
 
 ### Secrets and vars
 

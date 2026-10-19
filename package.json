@@ -13,7 +13,9 @@
     "start": "next start -p 4317",
     "lint": "eslint",
     "test": "vitest run",
-    "import:odoo": "tsx scripts/import-odoo.ts"
+    "import:odoo": "tsx scripts/import-odoo.ts",
+    "seed": "tsx scripts/seed.ts",
+    "reset-password": "tsx scripts/reset-password.ts"
   },
   "dependencies": {
     "@cloudflare/vite-plugin": "^1.64.0",

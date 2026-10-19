@@ -10,11 +10,16 @@ type Stmt = { sql: string; params: unknown[] };
 export function wrapD1(d1: D1Database): SqlDb {
   let buffer: Stmt[] | null = null;
 
+  const BATCH_LIMIT = 80;
+
   async function flush() {
     if (!buffer?.length) return;
     const pending = buffer;
     buffer = buffer ? [] : null;
-    await d1.batch(pending.map((stmt) => d1.prepare(stmt.sql).bind(...stmt.params)));
+    for (let index = 0; index < pending.length; index += BATCH_LIMIT) {
+      const slice = pending.slice(index, index + BATCH_LIMIT);
+      await d1.batch(slice.map((stmt) => d1.prepare(stmt.sql).bind(...stmt.params)));
+    }
   }
 
   return {
@@ -34,11 +39,11 @@ export function wrapD1(d1: D1Database): SqlDb {
         buffer = null;
         return;
       }
-      if (buffer) {
-        for (const part of splitSql(sql)) buffer.push({ sql: part, params: [] });
-        return;
+      // D1 exec() rejects multi-line SQL with "incomplete input". One prepare().run() per statement.
+      for (const part of splitSql(sql)) {
+        if (buffer) buffer.push({ sql: part, params: [] });
+        else await d1.prepare(part).bind().run();
       }
-      await d1.exec(sql);
     },
     async get<T>(sql: string, params: unknown[] = []) {
       if (buffer?.length) await flush();

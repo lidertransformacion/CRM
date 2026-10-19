@@ -1,20 +1,16 @@
 import path from "node:path";
-import { ensureBootstrapAdmin } from "@/lib/auth/users";
+import { hydrateProcessEnv, readEnv } from "@/lib/env";
 import { loadImportBytes, loadImportText } from "@/lib/import/load";
+import { runSeed, type SeedReport } from "@/lib/seed/advance";
 import { getSql, isSqlDb, type SqlDb } from "@/lib/sql";
-import { buildSeedCommittee } from "@/lib/committee/seed-data";
 import { applyAction, createNextCommittee } from "@/lib/committee/mutate";
 import { cohortsFromDocs, diffDocuments } from "@/lib/committee/compare";
 import type { CommitteeAction, CommitteeDoc } from "@/lib/committee/types";
-import { parseCsv } from "@/lib/csv";
-import { assetNumber, canonicalCategory, canonicalSupplier, CITIES, siteById, SITES, storeCode } from "@/lib/equipment/catalog";
-import { knownClients, splitLocation } from "@/lib/equipment/clients";
-import { maintenanceCost, parseHours, parseWarranty } from "@/lib/equipment/warranty";
-import { EMAIL_TEMPLATES } from "@/lib/emails/templates";
+import { assetNumber, siteById, storeCode } from "@/lib/equipment/catalog";
+import { maintenanceCost, parseWarranty } from "@/lib/equipment/warranty";
 import { computeKpis, type ActivityFact, type LeadFact } from "@/lib/kpi/compute";
 import { OdooSyncAdapter, type OdooCrmAdapter } from "@/lib/odoo/adapter";
 import { assignLeadKeys, mapActivityRow, mapLeadRow, mapTeamRows } from "@/lib/odoo/map";
-import { STAGES } from "@/lib/odoo/stages";
 import { readXlsxBuffer, readXlsxRows } from "@/lib/odoo/xlsx";
 import { snapshotFromCsv } from "@/lib/sheets/csv";
 import { planPull, planPush } from "@/lib/sheets/diff";
@@ -91,7 +87,11 @@ async function attach(db: unknown) {
   return facade(await rawDb(db));
 }
 
-let seeding: Promise<void> | null = null;
+/**
+ * Orders overlapping setup work. This is not a finished-setup cache:
+ * every getDb() call schedules its own batch and bootstrap check.
+ */
+let setupTail: Promise<void> = Promise.resolve();
 
 export async function openDatabase(file: string) {
   const { openDatabaseSync } = await import("@/lib/sql/node");
@@ -99,17 +99,19 @@ export async function openDatabase(file: string) {
 }
 
 export async function getDb(): Promise<SqlDb> {
-  const { hydrateProcessEnv } = await import("@/lib/env");
   await hydrateProcessEnv();
   const db = await getSql();
-  if (!seeding) {
-    seeding = seedIfEmpty(db).catch((error) => {
-      seeding = null;
-      throw error;
-    });
-  }
-  await seeding;
+  const run = setupTail.then(() => advanceSeed(db, { maxBatches: 1 }));
+  setupTail = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  await run;
   return db;
+}
+
+export async function advanceSeed(db?: unknown, options?: { maxBatches?: number; reset?: boolean }): Promise<SeedReport> {
+  return runSeed(await rawDb(db), options);
 }
 
 async function sqlOf(db?: unknown) {
@@ -120,37 +122,14 @@ async function sqlOf(db?: unknown) {
 
 
 export async function seedIfEmpty(db?: unknown) {
-  const sql = await sqlOf(db);
-  const committee = await sql.prepare("SELECT COUNT(*) AS n FROM committee_docs").get() as { n: number };
-  if (!committee.n) await seedCommittee(db);
-  const leads = await sql.prepare("SELECT COUNT(*) AS n FROM leads").get() as { n: number };
-  if (!leads.n) await importOdooFiles(db, defaultOdooPaths());
-  const equipment = await sql.prepare("SELECT COUNT(*) AS n FROM equipment").get() as { n: number };
-  if (!equipment.n) await seedEquipment(db);
-  const templates = await sql.prepare("SELECT COUNT(*) AS n FROM email_templates").get() as { n: number };
-  if (!templates.n) {
-    const insert = await sql.prepare("INSERT INTO email_templates (id, name, subject, body, sort_order) VALUES (?, ?, ?, ?, ?)");
-    for (const template of EMAIL_TEMPLATES) await insert.run(template.id, template.name, template.subject, template.body, template.sortOrder);
+  let guard = 0;
+  let report = await advanceSeed(db, { maxBatches: 40 });
+  while (!report.complete && guard < 20) {
+    report = await advanceSeed(db, { maxBatches: 40 });
+    guard += 1;
   }
-  const rate = await sql.prepare("SELECT value FROM app_settings WHERE key = ?").get("maintenance_hourly_rate_cop") as { value: string } | undefined;
-  if (!rate) await sql.prepare("INSERT INTO app_settings (key, value) VALUES (?, ?)").run("maintenance_hourly_rate_cop", "50000");
-  for (const stage of STAGES) {
-    await sql.prepare(
-      "INSERT INTO stages (name, position, is_won, is_lost, team_restriction, short_label) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(name) DO NOTHING",
-    ).run(stage.name, stage.position, stage.isWon ? 1 : 0, stage.isLost ? 1 : 0, stage.teamRestriction, stage.short);
-  }
-  await ensureBootstrapAdmin(await rawDb(db));
-}
-
-async function seedCommittee(db?: unknown) {
-  const sql = await sqlOf(db);
-  const doc = buildSeedCommittee();
-  await sql.prepare("INSERT INTO committee_docs (number, held_on, is_current, payload, created_at) VALUES (?, ?, 1, ?, ?)").run(
-    doc.committee.number,
-    doc.committee.heldOn,
-    JSON.stringify(doc),
-    new Date().toISOString(),
-  );
+  if (!report.complete) throw new Error("La semilla no terminó.");
+  return report;
 }
 
 export function defaultOdooPaths() {
@@ -261,84 +240,6 @@ async function catalog(db: unknown, kind: string, value: string) {
   if (!value) return;
   const count = await sql.prepare("SELECT COUNT(*) AS n FROM catalogs WHERE kind = ?").get(kind) as { n: number };
   await sql.prepare("INSERT INTO catalogs (kind, value, sort_order) VALUES (?, ?, ?) ON CONFLICT(kind, value) DO NOTHING").run(kind, value, count.n + 1);
-}
-
-async function seedEquipment(db?: unknown) {
-  const sql = await sqlOf(db);
-  const snapshot = snapshotFromCsv(await loadImportText("listado_equipos.csv"));
-  const suppliers = parseCsv(await loadImportText("info_proveedores.csv"));
-  const headers = suppliers[0] ?? [];
-  const insertSupplier = await sql.prepare("INSERT OR REPLACE INTO suppliers (name, odoo_name, nit, email, needs_review) VALUES (?, ?, ?, ?, ?)");
-  for (const cells of suppliers.slice(1)) {
-    const record = Object.fromEntries(headers.map((header, index) => [header.trim(), (cells[index] ?? "").trim()]));
-    const name = record["Nombre"] ?? "";
-    if (!name) continue;
-    const odoo = record["Nombre Odoo"] ?? "";
-    const nit = record["NIT"] ?? "";
-    const email = record["Correo Electronico Facturacion"] ?? "";
-    const needs = /revisar/i.test(odoo) || !nit ? 1 : 0;
-    await insertSupplier.run(name, odoo, nit, email, needs);
-    await catalog(db, "supplier", canonicalSupplier(name));
-  }
-  const insert = await sql.prepare(
-    `INSERT INTO equipment (
-      serial, sheet_serial, asset_number, name, category, site_id, site_seq, store_code, supplier, supplier_reference, model,
-      warranty_until, warranty_state, warranty_raw, maintenance_every_days, hours_min, hours_max, hours_label,
-      client_name, address, city, city_source, location_raw, status, delivered_on, salesperson, lead_import_key, notes,
-      dirty_json, sheet_cells_json, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, '', '[]', ?, ?, ?)`,
-  );
-  const now = new Date().toISOString();
-  for (const [index, row] of snapshot.rows.entries()) {
-    const siteId = row.cells["ID"] ?? "";
-    const seq = Number(row.cells.idnum || "0");
-    const category = canonicalCategory(row.cells["Categoría del equipo"]);
-    const supplier = canonicalSupplier(row.cells["Proveedor"]);
-    const warranty = parseWarranty(row.cells["Fecha expiración Garantía"]);
-    const hours = parseHours(row.cells["Duracción Mantenimiento [horas]"]);
-    const everyRaw = row.cells["Frecuencia Mantenimiento [dias]"] ?? "";
-    const every = everyRaw ? Number(everyRaw) : null;
-    const location = splitLocation(row.cells["Ubicación Comercial cliente hospitality"]);
-    const status = location.client || location.address ? "en_comodato" : "en_tienda";
-    await insert.run(
-      row.serial,
-      row.serial,
-      assetNumber(index + 1),
-      (row.cells["Nombre del equipo"] ?? "").trim(),
-      category,
-      siteId,
-      seq,
-      storeCode(siteId, seq),
-      supplier,
-      row.cells["Referencia de Proveedor"] ?? "",
-      row.cells["Modelo"] ?? "",
-      warranty.until,
-      warranty.state,
-      warranty.raw,
-      every,
-      hours.min,
-      hours.max,
-      row.cells["Duracción Mantenimiento [horas]"] ?? "",
-      location.client,
-      location.address,
-      location.city,
-      location.citySource,
-      row.cells["Ubicación Comercial cliente hospitality"] ?? "",
-      status,
-      JSON.stringify(row.cells),
-      now,
-      now,
-    );
-    await catalog(db, "category", category);
-    if (supplier) await catalog(db, "supplier", supplier);
-    if (location.client) await catalog(db, "client", location.client);
-    if (location.city) await catalog(db, "city", location.city);
-  }
-  for (const client of knownClients()) await catalog(db, "client", client);
-  for (const city of CITIES) await catalog(db, "city", city);
-  for (const site of SITES) await catalog(db, "site", site.id);
-  const sellers = await sql.prepare("SELECT DISTINCT salesperson FROM leads WHERE salesperson != ''").all() as { salesperson: string }[];
-  for (const seller of sellers) await catalog(db, "salesperson", seller.salesperson);
 }
 
 export async function currentCommittee(db?: unknown): { id: number; doc: CommitteeDoc } {
@@ -852,9 +753,10 @@ export function toSyncRow(row: EquipmentRow): EquipmentSyncRow {
 export async function sheetPlans(db?: unknown) {
   const snapshot = snapshotFromCsv(await loadImportText("listado_equipos.csv"));
   const local = (await listEquipment(db)).map(toSyncRow);
+  const enabled = (await readEnv("SHEETS_SYNC_ENABLED")) === "true";
   return {
-    enabled: process.env.SHEETS_SYNC_ENABLED === "true",
-    mode: process.env.SHEETS_SYNC_ENABLED === "true" ? "live" : "dry-run",
+    enabled,
+    mode: enabled ? "live" : "dry-run",
     push: planPush(local, snapshot),
     pull: planPull(local, snapshot),
   };

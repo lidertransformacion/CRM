@@ -1,6 +1,7 @@
 "use client";
 
 import { Suspense, useState, type FormEvent } from "react";
+import Image from "next/image";
 import { useRouter, useSearchParams } from "next/navigation";
 
 function LoginForm() {
@@ -18,7 +19,7 @@ function LoginForm() {
     const response = await fetch("/api/auth/login", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email, password }),
+      body: JSON.stringify({ email: email.trim(), password: password.trim() }),
     });
     const body = (await response.json()) as { error?: string; mustChangePassword?: boolean };
     setPending(false);
@@ -33,8 +34,8 @@ function LoginForm() {
 
   return (
     <main className="mx-auto flex min-h-screen max-w-md flex-col justify-center px-4 py-10">
-      <p className="text-xs tracking-[0.16em] text-[#98a2b3]">LIBERTARIO COFFEE</p>
-      <h1 className="font-serif text-4xl">CRM Pay Line</h1>
+      <Image src="/brand/logo-light.png" alt="Libertario" width={334} height={80} className="h-12 w-auto" priority unoptimized />
+      <h1 className="mt-3 font-serif text-4xl">CRM Pay Line</h1>
       <p className="mt-2 text-sm text-[#667085]">Entra con tu correo de Libertario Coffee Roasters.</p>
       <form onSubmit={onSubmit} className="mt-6 space-y-3 rounded-3xl bg-white p-6 shadow-sm">
         <label className="block text-sm">

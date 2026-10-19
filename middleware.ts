@@ -1,10 +1,10 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { allowsDuringPasswordChange, isPublicPath } from "@/lib/auth/guard";
+import { allowsDuringPasswordChange, isPublicPath, isStaticAsset } from "@/lib/auth/guard";
 import { readSessionFromRequest } from "@/lib/auth/session";
 
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
-  if (isPublicPath(pathname)) return NextResponse.next();
+  if (isStaticAsset(pathname) || isPublicPath(pathname)) return NextResponse.next();
   const session = await readSessionFromRequest(request);
   if (!session) {
     if (pathname.startsWith("/api/")) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
@@ -23,5 +23,5 @@ export async function middleware(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"],
+  matcher: ["/((?!_next/static|_next/image|favicon.ico|favicon.png|apple-touch-icon.png|manifest.webmanifest|icons/|brand/).*)"],
 };

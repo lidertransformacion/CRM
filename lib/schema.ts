@@ -230,9 +230,4 @@ export const ALTERS = [
   "ALTER TABLE users ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0",
 ];
 
-export function splitSql(sql: string): string[] {
-  return sql
-    .split(";")
-    .map((statement) => statement.trim())
-    .filter((statement) => statement.length > 0 && !statement.startsWith("--"));
-}
+export { splitSqlStatements as splitSql } from "@/lib/sql/statements";
