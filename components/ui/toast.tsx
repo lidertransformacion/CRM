@@ -33,7 +33,7 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
   return (
     <ToastContext.Provider value={value}>
       {children}
-      <div className="pointer-events-none fixed bottom-4 right-4 z-[100] flex w-[min(360px,calc(100vw-2rem))] flex-col gap-2" aria-live="polite">
+      <div className="pointer-events-none fixed z-[100] flex flex-col gap-2 max-sm:inset-x-4 max-sm:bottom-[calc(4.75rem+env(safe-area-inset-bottom))] sm:bottom-4 sm:right-4 sm:w-[min(360px,calc(100vw-2rem))]" aria-live="polite">
         {items.map((item) => (
           <div key={item.id} role="status" className="anim-toast-in pointer-events-auto flex items-start gap-3 rounded-lg border border-line-2 bg-surface px-3.5 py-3 shadow-pop">
             <span className="mt-0.5 shrink-0">{ICONS[item.tone ?? "ok"]}</span>

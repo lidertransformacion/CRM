@@ -28,7 +28,7 @@ export function PageHeader({
           <h1 className="text-[28px] leading-tight text-ink sm:text-[32px]">{title}</h1>
           {description && <p className="mt-1 max-w-2xl text-sm text-ink-2">{description}</p>}
         </div>
-        {actions && <div className="flex min-w-0 max-w-full flex-wrap items-center gap-2">{actions}</div>}
+        {actions && <div className="flex min-w-0 max-w-full flex-wrap items-center gap-2 max-sm:w-full">{actions}</div>}
       </div>
       {children}
     </header>

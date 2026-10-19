@@ -35,7 +35,10 @@ export function DialogContent({
       <DialogPrimitive.Overlay className="anim-fade-in fixed inset-0 z-40 bg-navy-deep/45 backdrop-blur-[1px]" />
       <DialogPrimitive.Content
         className={cn(
-          "anim-pop-in fixed left-1/2 top-1/2 z-50 flex max-h-[88vh] w-[calc(100%-1.5rem)] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-xl border border-line-2 bg-surface shadow-pop outline-none",
+          // Escritorio: centrado. Móvil: hoja que sube desde abajo, ancho completo y esquinas superiores redondeadas.
+          "fixed left-1/2 z-50 flex flex-col overflow-hidden border border-line-2 bg-surface shadow-pop outline-none",
+          "sm:anim-pop-in sm:top-1/2 sm:max-h-[88vh] sm:w-[calc(100%-1.5rem)] sm:-translate-x-1/2 sm:-translate-y-1/2 sm:rounded-xl",
+          "max-sm:anim-sheet-in-up max-sm:bottom-0 max-sm:w-full max-sm:max-h-[92dvh] max-sm:-translate-x-1/2 max-sm:rounded-t-2xl max-sm:border-b-0",
           SIZES[size],
           className,
         )}
@@ -71,5 +74,5 @@ export function DialogBody({ className, ...props }: React.ComponentProps<"div">)
 }
 
 export function DialogFooter({ className, ...props }: React.ComponentProps<"div">) {
-  return <div className={cn("flex flex-wrap items-center justify-end gap-2 border-t border-line-2 bg-surface-2 px-5 py-3", className)} {...props} />;
+  return <div className={cn("safe-bottom flex flex-wrap items-center justify-end gap-2 border-t border-line-2 bg-surface-2 px-5 py-3 max-sm:[&>button]:flex-1", className)} {...props} />;
 }

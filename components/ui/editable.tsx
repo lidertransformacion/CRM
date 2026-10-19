@@ -103,8 +103,8 @@ export function EditableText({
         className,
       )}
     >
-      <span className={cn("min-w-0 break-words", !disabled && "decoration-dotted decoration-ink-3/60 underline-offset-4 group-hover/edit:underline")}>{empty ? placeholder : value}</span>
-      {!disabled && <Pencil className="mt-[0.35em] size-3 shrink-0 text-ink-3 opacity-0 transition-opacity group-hover/edit:opacity-100 group-focus-visible/edit:opacity-100" aria-hidden />}
+      <span className={cn("min-w-0 break-words", !disabled && "decoration-dotted decoration-ink-3/60 underline-offset-4 group-hover/edit:underline pointer-coarse:underline")}>{empty ? placeholder : value}</span>
+      {!disabled && <Pencil className="mt-[0.35em] size-3 shrink-0 text-ink-3 opacity-0 transition-opacity group-hover/edit:opacity-100 group-focus-visible/edit:opacity-100 pointer-coarse:opacity-100" aria-hidden />}
     </Tag>
   );
 }

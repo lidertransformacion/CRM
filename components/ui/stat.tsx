@@ -55,7 +55,7 @@ export function Stat({
     </>
   );
   const base = cn(
-    "group block w-full rounded-xl border bg-surface px-4 py-3.5 text-left shadow-card",
+    "group block w-full rounded-xl border bg-surface px-4 py-3.5 text-left shadow-card max-sm:px-3 max-sm:py-3",
     active ? "border-navy ring-1 ring-navy" : "border-line-2",
     interactive && "transition-colors hover:border-line hover:bg-surface-2",
     className,

@@ -127,6 +127,7 @@
 @keyframes sheet-in-left { from { transform: translateX(-100%); } to { transform: translateX(0); } }
 @keyframes toast-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
 @keyframes rise-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes sheet-in-up { from { transform: translate(-50%, 100%); } to { transform: translate(-50%, 0); } }
 
 @layer components {
 .anim-fade-in { animation: fade-in 160ms ease-out both; }
@@ -135,10 +136,11 @@
 .anim-sheet-in-left { animation: sheet-in-left 220ms cubic-bezier(0.2, 0.8, 0.2, 1) both; }
 .anim-toast-in { animation: toast-in 180ms ease-out both; }
 .anim-rise-in { animation: rise-in 200ms ease-out both; }
+.anim-sheet-in-up { animation: sheet-in-up 240ms cubic-bezier(0.2, 0.8, 0.2, 1) both; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .anim-fade-in, .anim-pop-in, .anim-sheet-in-right, .anim-sheet-in-left, .anim-toast-in, .anim-rise-in { animation: none; }
+  .anim-fade-in, .anim-pop-in, .anim-sheet-in-right, .anim-sheet-in-left, .anim-toast-in, .anim-rise-in, .anim-sheet-in-up { animation: none; }
 }
 
 @layer components {
@@ -162,3 +164,15 @@
 .email-preview th, .email-preview td { border: 1px solid var(--line); padding: 6px 8px; text-align: left; vertical-align: top; }
 .email-preview th { background: var(--surface-2); }
 }
+
+/* ── Móvil ──
+   Fuera de capas a propósito: en pantallas pequeñas los campos van a 16px para que iOS no haga
+   zoom al enfocar, y los controles alcanzan 44px de alto (tamaño táctil cómodo). */
+@media (max-width: 640px) {
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]), select, textarea { font-size: 16px; }
+  .page { padding-top: 16px; }
+}
+
+/* Zonas seguras (notch y barra inferior del iPhone) */
+.safe-bottom { padding-bottom: max(0.75rem, env(safe-area-inset-bottom)); }
+.safe-top { padding-top: env(safe-area-inset-top); }

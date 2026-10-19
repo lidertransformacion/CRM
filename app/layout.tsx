@@ -15,6 +15,7 @@ export const metadata: Metadata = {
   title: { default: "CRM Libertario", template: "%s · CRM Libertario" },
   description: "Herramienta del equipo Comercial de Libertario Coffee Roasters: comités, pipeline Pay Line, KPIs, equipos en comodato, clientes y correos.",
   manifest: "/manifest.webmanifest",
+  appleWebApp: { capable: true, title: "CRM Libertario", statusBarStyle: "default" },
   icons: {
     icon: [
       { url: "/favicon.png", sizes: "32x32", type: "image/png" },
@@ -25,7 +26,7 @@ export const metadata: Metadata = {
   },
 };
 
-export const viewport: Viewport = { themeColor: "#182b55", width: "device-width", initialScale: 1 };
+export const viewport: Viewport = { themeColor: "#182b55", width: "device-width", initialScale: 1, viewportFit: "cover" };
 
 export default function RootLayout({ children }: Readonly<{ children: ReactNode }>) {
   return (

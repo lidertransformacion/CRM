@@ -34,7 +34,7 @@ export function Segmented<T extends string>({
             onClick={() => onChange(option.value)}
             className={cn(
               "inline-flex shrink-0 items-center gap-1.5 rounded-[7px] font-medium transition-colors",
-              size === "sm" ? "h-7 px-2.5 text-xs" : "h-8 px-3 text-sm",
+              size === "sm" ? "h-7 px-2.5 text-xs max-sm:h-9" : "h-8 px-3 text-sm max-sm:h-10",
               active ? "bg-surface text-ink shadow-[0_1px_2px_rgba(24,43,85,.12)]" : "text-ink-2 hover:text-ink",
             )}
           >

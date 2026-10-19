@@ -17,7 +17,7 @@ export function Chip({
       type="button"
       aria-pressed={active}
       className={cn(
-        "inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full border px-3 text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50",
+        "inline-flex h-8 max-sm:h-10 shrink-0 items-center gap-1.5 rounded-full border px-3 text-xs font-medium max-sm:text-[13px] transition-colors disabled:cursor-not-allowed disabled:opacity-50",
         active ? "border-navy bg-navy text-crema" : alert ? "border-[#f0b4b4] bg-danger-soft text-danger hover:bg-[#f8d9d9]" : "border-line bg-surface text-ink-2 hover:border-[rgba(24,43,85,.3)] hover:text-ink",
         className,
       )}

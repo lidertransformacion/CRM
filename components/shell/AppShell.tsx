@@ -3,7 +3,7 @@
 import * as React from "react";
 import Link, { useLinkStatus } from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { LoaderCircle, Menu, Search } from "lucide-react";
+import { LoaderCircle, LogOut, Search, Settings, UserRound } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Kbd } from "@/components/ui/kbd";
 import { Sheet, SheetContent, SheetBody } from "@/components/ui/sheet";
@@ -11,6 +11,7 @@ import { CommandPalette } from "@/components/shell/CommandPalette";
 import { LogoMark } from "@/components/shell/LogoMark";
 import { CommandPaletteContext } from "@/components/shell/command-palette-context";
 import { NavigationProgress } from "@/components/shell/NavigationProgress";
+import { BottomNav } from "@/components/shell/BottomNav";
 import { NAV, currentSection, isActive } from "@/components/shell/nav";
 
 export function AppShell({ children }: { children: React.ReactNode }) {
@@ -63,14 +64,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
         <div className="lg:pl-[var(--sidebar-w)]">
           <header className="sticky top-0 z-20 flex h-14 items-center gap-3 border-b border-line-2 bg-bg/85 px-4 backdrop-blur lg:px-7">
-            <button
-              type="button"
-              onClick={() => setMobileOpen(true)}
-              className="rounded-md p-2 text-ink-2 hover:bg-accent-soft lg:hidden"
-              aria-label="Abrir menú"
-            >
-              <Menu className="size-5" />
-            </button>
             <Link href="/" className="flex items-center gap-2 lg:hidden">
               <LogoMark className="size-6 text-navy" />
               <span className="font-sans text-sm font-semibold">
@@ -106,8 +99,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               </button>
             </div>
           </header>
-          <main id="contenido">{children}</main>
+          <main id="contenido" className="pb-[calc(3.5rem+env(safe-area-inset-bottom))] lg:pb-0">{children}</main>
         </div>
+
+        <BottomNav onMore={() => setMobileOpen(true)} moreOpen={mobileOpen} />
 
         <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
           <SheetContent
@@ -115,7 +110,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             size="sm"
             title="CRM Libertario"
             description="Equipo Comercial"
-            className="bg-navy text-crema [&_.eyebrow]:text-crema/60 [&_[data-slot=title]]:text-crema"
+            className="bg-navy text-crema [&_.eyebrow]:text-crema/60 [&_[data-slot=title]]:text-crema [&_[data-slot=description]]:text-crema/60 [&_button[aria-label=Cerrar]]:text-crema/70"
           >
             <SheetBody className="px-2 py-2">
               <SidebarNav pathname={pathname} />
@@ -192,18 +187,18 @@ function SidebarFooter() {
   }
   return (
     <div className="border-t border-white/10 px-5 py-4 text-[11px] leading-relaxed text-crema/55">
-      <div className="mb-2 flex flex-wrap gap-3 text-sm">
-        <Link href="/cuenta" className="text-crema/80 hover:text-white">
-          Cuenta
+      <div className="mb-2 grid grid-cols-3 gap-1 text-sm">
+        <Link href="/cuenta" className="flex h-11 flex-col items-center justify-center gap-0.5 rounded-md text-crema/80 hover:bg-white/8 hover:text-white lg:h-9 lg:flex-row lg:gap-1.5">
+          <UserRound className="size-4" /> Cuenta
         </Link>
-        <Link href="/ajustes" className="text-crema/80 hover:text-white">
-          Ajustes
+        <Link href="/ajustes" className="flex h-11 flex-col items-center justify-center gap-0.5 rounded-md text-crema/80 hover:bg-white/8 hover:text-white lg:h-9 lg:flex-row lg:gap-1.5">
+          <Settings className="size-4" /> Ajustes
         </Link>
-        <button type="button" onClick={logout} className="text-crema/80 hover:text-white">
-          Salir
+        <button type="button" onClick={logout} className="flex h-11 flex-col items-center justify-center gap-0.5 rounded-md text-crema/80 hover:bg-white/8 hover:text-white lg:h-9 lg:flex-row lg:gap-1.5">
+          <LogOut className="size-4" /> Salir
         </button>
       </div>
-      <p>No envía correos ni escribe en Odoo.</p>
+      <p className="text-center lg:text-left">No envía correos ni escribe en Odoo.</p>
     </div>
   );
 }

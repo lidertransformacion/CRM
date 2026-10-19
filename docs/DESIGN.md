@@ -101,9 +101,29 @@ Si hace falta algo que no existe, se crea en `components/ui` siguiendo el mismo 
 
 ## Móvil
 
-- Una `Card` dentro de un `grid` necesita `grid-cols-1` (o `min-w-0` en la Card) si contiene texto con `truncate`; si no, el grid crece y aparece scroll horizontal.
-- Los montos COP en `Stat` van compactos ("$ 442 M") cuando hay 5 o 6 indicadores por fila; el valor completo va en `hint`.
-- Tablas: `TableWrap` + `min-w` en la tabla para que desplacen en horizontal sin romper la página.
+El CRM se usa tanto en el portátil como en el celular (instalable como PWA). En móvil la regla es: **una columna, controles grandes, lo importante arriba y nada que requiera precisión**.
+
+Base ya resuelta en el shell y las primitivas (no repetir en los módulos):
+
+- Barra de pestañas inferior (`BottomNav`): Inicio, Comités, Pipeline, Equipos y "Más" (menú completo). El contenido deja espacio abajo (`main` con `pb`); los elementos fijos propios (pies pegajosos, botones flotantes) deben quedar **por encima** de esa barra: `bottom-[calc(3.5rem+env(safe-area-inset-bottom))]`.
+- Tamaño táctil: `Button`, `Input`, `Select`, `Chip` y `Segmented` crecen a 40–44 px en `< sm`; los campos van a 16 px para que iOS no haga zoom.
+- `Dialog` sube desde abajo como hoja (ancho completo); `Sheet` ocupa toda la pantalla; ambos pies usan `safe-bottom` y sus botones se reparten el ancho.
+- `EditableText` muestra siempre el lápiz en pantallas táctiles (`pointer-coarse:`).
+- Toasts aparecen sobre la barra inferior.
+
+Patrones por módulo:
+
+1. **Sin desbordes horizontales.** Todo hijo de `grid` o `flex` que contenga texto largo lleva `min-w-0`; las rejillas usan `grid-cols-1` en móvil. Comprobar `document.documentElement.scrollWidth === 390`.
+2. **Filtros en móvil**: en `< sm` queda visible solo el `SearchInput` (y, si cabe, un `Segmented` corto); el resto de selects va en un `Sheet`/`Dialog` "Filtros" abierto desde un botón `secondary` con el número de filtros activos ("Filtros · 2"). Debajo, chips con los filtros activos y su "×". En escritorio todo sigue en la `Toolbar`.
+3. **Tabla → lista en móvil**: las tablas de registros (equipos, oportunidades en lista, KPIs por vendedor, mantenimientos) se muestran en `< sm` como lista de filas tocables (`sm:hidden`) con: texto principal en negrita, línea secundaria en `text-ink-3`, 1–2 `Badge` a la derecha y chevron; toda la fila abre el detalle. La tabla queda para `sm:` en adelante (`max-sm:hidden`). Si la tabla es solo de lectura y corta (≤ 4 columnas) puede quedarse con `TableWrap` (scroll lateral).
+4. **Tableros (kanban)**: en móvil una columna por pantalla con desplazamiento horizontal y `snap-x`, cabeceras pegajosas, y un selector de etapa (`Segmented` desplazable o `Select`) arriba para saltar; mover se hace desde el panel del registro, no arrastrando.
+5. **Lista + detalle (clientes, correos)**: en móvil la lista ocupa la pantalla y el detalle se abre en `Sheet` a pantalla completa o reemplaza la lista con botón "Volver"; nunca los dos apilados con la lista entera arriba.
+6. **Cabecera compacta**: `PageHeader` con título a 26 px, descripción de una línea (`max-sm:line-clamp-2`) y acciones en una fila; si hay más de dos acciones, las secundarias van en el menú "⋯".
+7. **Indicadores**: máximo 4 `Stat` visibles en móvil (2 × 2); los demás van en una fila con desplazamiento horizontal (`max-sm:flex max-sm:overflow-x-auto max-sm:snap-x`) o se omiten.
+8. **Texto**: nada de "a la izquierda", "⌘K", "haz clic" ni "arrastra" en móvil. Usar "arriba", "Buscar", "toca". Los atajos de teclado se ocultan en `< sm`.
+9. **Formularios largos** (equipo, meta, mantenimiento): secciones apiladas en una columna (`FieldGrid` ya pasa a 1 columna), botón de guardar en el pie pegajoso del `Sheet`/`Dialog`.
+10. **Montos** COP en `Stat` van compactos ("$ 442 M") cuando hay 5 o 6 indicadores por fila; el valor completo va en `hint`.
+11. **Tablas con scroll lateral** (cuando se conservan): `TableWrap` + `min-w` en la tabla y la primera columna legible; nunca el `body` entero desplazándose.
 
 ## Texto
 
