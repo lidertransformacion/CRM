@@ -3,7 +3,15 @@ import { applySchema } from "@/lib/sql/schema-apply";
 import { wrapD1 } from "@/lib/sql/d1";
 import type { SqlDb } from "@/lib/sql/types";
 
-const globalStore = globalThis as unknown as { __crmSql?: Map<string, Promise<SqlDb>> };
+const globalStore = globalThis as unknown as { __crmSql?: Map<string, Promise<SqlDb>>; __crmSetupReady?: boolean };
+
+export function isSetupReady(): boolean {
+  return globalStore.__crmSetupReady === true;
+}
+
+export function markSetupReady(): void {
+  globalStore.__crmSetupReady = true;
+}
 
 export async function tryD1(): Promise<SqlDb | null> {
   if (process.env.VITEST) return null;
@@ -42,6 +50,7 @@ export async function getSql(): Promise<SqlDb> {
 
 export function resetSqlCache() {
   globalStore.__crmSql = new Map();
+  globalStore.__crmSetupReady = false;
 }
 
 export type { SqlDb } from "@/lib/sql/types";

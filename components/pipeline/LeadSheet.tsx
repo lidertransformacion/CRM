@@ -37,15 +37,19 @@ export function LeadSheet({
 }) {
   const key = lead?.import_key ?? null;
   const [activities, setActivities] = React.useState<ActivityRecord[] | null>(null);
+  const [detail, setDetail] = React.useState<LeadRecord | null>(null);
 
   React.useEffect(() => {
     if (!open || !key) return;
     let cancelled = false;
     setActivities(null);
+    setDetail(null);
     fetch(`/api/leads?key=${encodeURIComponent(key)}`)
-      .then((response) => (response.ok ? (response.json() as Promise<{ activities: ActivityRecord[] }>) : null))
+      .then((response) => (response.ok ? (response.json() as Promise<{ lead?: LeadRecord; activities: ActivityRecord[] }>) : null))
       .then((payload) => {
-        if (!cancelled) setActivities(payload?.activities ?? []);
+        if (cancelled) return;
+        setActivities(payload?.activities ?? []);
+        if (payload?.lead) setDetail(payload.lead);
       })
       .catch(() => {
         if (!cancelled) setActivities([]);
@@ -56,19 +60,20 @@ export function LeadSheet({
   }, [open, key]);
 
   if (!lead) return null;
-  const group = stageGroup(lead.stage);
-  const overdue = isOverdue(lead, today);
-  const probability = lead.probability == null ? null : Math.max(0, Math.min(100, Math.round(lead.probability)));
-  const tags = lead.tags ? lead.tags.split(",").map((tag) => tag.trim()).filter(Boolean) : [];
+  const shown = detail ?? lead;
+  const group = stageGroup(shown.stage);
+  const overdue = isOverdue(shown, today);
+  const probability = shown.probability == null ? null : Math.max(0, Math.min(100, Math.round(shown.probability)));
+  const tags = shown.tags ? shown.tags.split(",").map((tag) => tag.trim()).filter(Boolean) : [];
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent
         size="md"
         eyebrow="Oportunidad"
-        title={lead.customer || lead.name}
-        description={lead.customer ? lead.name : `${displaySeller(lead.salesperson)} · ${lead.team || "Sin equipo"}`}
-        actions={<Badge tone={GROUP_META[group].badge}>{stageShort(lead.stage)}</Badge>}
+        title={shown.customer || shown.name}
+        description={shown.customer ? shown.name : `${displaySeller(shown.salesperson)} · ${shown.team || "Sin equipo"}`}
+        actions={<Badge tone={GROUP_META[group].badge}>{stageShort(shown.stage)}</Badge>}
       >
         <SheetBody className="space-y-6">
           <Field
@@ -80,7 +85,7 @@ export function LeadSheet({
               </>
             }
           >
-            <Select id="lead-stage" value={lead.stage} disabled={saving} onChange={(event) => void onMove(lead.import_key, event.target.value)}>
+            <Select id="lead-stage" value={shown.stage} disabled={saving} onChange={(event) => void onMove(shown.import_key, event.target.value)}>
               <optgroup label="En curso">
                 {STAGES.filter((stage) => stageGroup(stage.name) === "open").map((stage) => (
                   <option key={stage.name} value={stage.name}>{stage.position}. {stage.short}</option>
@@ -97,9 +102,9 @@ export function LeadSheet({
           <FieldSection title="Datos de la oportunidad">
             {/* Dos columnas también en el celular: los datos cortos caben y los largos ocupan toda la fila. */}
             <dl className="grid grid-cols-2 gap-x-4 gap-y-3">
-              <Item label="Vendedor" value={displaySeller(lead.salesperson)} />
-              <Item label="Equipo" value={lead.team || "—"} />
-              <Item label="Ingreso esperado" value={<span className="num">{lead.expected_revenue ? cop(lead.expected_revenue) : "—"}</span>} />
+              <Item label="Vendedor" value={displaySeller(shown.salesperson)} />
+              <Item label="Equipo" value={shown.team || "—"} />
+              <Item label="Ingreso esperado" value={<span className="num">{shown.expected_revenue ? cop(shown.expected_revenue) : "—"}</span>} />
               <Item
                 label="Probabilidad"
                 value={
@@ -111,29 +116,29 @@ export function LeadSheet({
                   )
                 }
               />
-              <Item label="Creada el" value={fullDate(lead.created_at)} />
-              <Item label="Cierre previsto" value={lead.expected_close ? fullDate(lead.expected_close) : "—"} />
-              {lead.closed_at && <Item label="Cerrada el" value={fullDate(lead.closed_at)} />}
+              <Item label="Creada el" value={fullDate(shown.created_at)} />
+              <Item label="Cierre previsto" value={shown.expected_close ? fullDate(shown.expected_close) : "—"} />
+              {shown.closed_at && <Item label="Cerrada el" value={fullDate(shown.closed_at)} />}
               <Item
                 label="Próxima actividad"
                 wide
                 value={
-                  lead.next_activity_deadline ? (
+                  shown.next_activity_deadline ? (
                     <span className="flex flex-wrap items-center gap-1.5">
-                      {overdue ? <Badge tone="danger" size="sm" dot>Vencida · {shortDate(lead.next_activity_deadline)}</Badge> : <Badge tone="info" size="sm">{shortDate(lead.next_activity_deadline)}</Badge>}
-                      <span>{[lead.next_activity_type, lead.next_activity_summary].filter(Boolean).join(" · ") || null}</span>
+                      {overdue ? <Badge tone="danger" size="sm" dot>Vencida · {shortDate(shown.next_activity_deadline)}</Badge> : <Badge tone="info" size="sm">{shortDate(shown.next_activity_deadline)}</Badge>}
+                      <span>{[shown.next_activity_type, shown.next_activity_summary].filter(Boolean).join(" · ") || null}</span>
                     </span>
                   ) : (
                     "Sin actividad programada"
                   )
                 }
               />
-              <Item label="Estado" value={lead.active ? <Badge tone="ok" size="sm" dot>Activa</Badge> : <Badge tone="outline" size="sm">Inactiva</Badge>} />
+              <Item label="Estado" value={shown.active ? <Badge tone="ok" size="sm" dot>Activa</Badge> : <Badge tone="outline" size="sm">Inactiva</Badge>} />
               <Item
                 label="Resultado en Odoo"
-                value={<Badge size="sm" tone={lead.won_status === "Ganado" ? "ok" : lead.won_status === "Perdido" ? "danger" : "neutral"}>{lead.won_status || "Pendiente"}</Badge>}
+                value={<Badge size="sm" tone={shown.won_status === "Ganado" ? "ok" : shown.won_status === "Perdido" ? "danger" : "neutral"}>{shown.won_status || "Pendiente"}</Badge>}
               />
-              {lead.loss_reason && <Item label="Motivo de pérdida" wide value={lead.loss_reason} />}
+              {shown.loss_reason && <Item label="Motivo de pérdida" wide value={shown.loss_reason} />}
               {tags.length > 0 && (
                 <Item
                   label="Etiquetas"
@@ -145,7 +150,7 @@ export function LeadSheet({
                   }
                 />
               )}
-              {!!lead.edited_locally && <Item label="Origen del dato" wide value={<Badge tone="warn" size="sm">Cambiada aquí · distinta de Odoo</Badge>} />}
+              {!!shown.edited_locally && <Item label="Origen del dato" wide value={<Badge tone="warn" size="sm">Cambiada aquí · distinta de Odoo</Badge>} />}
             </dl>
           </FieldSection>
 
@@ -168,15 +173,15 @@ export function LeadSheet({
         </SheetBody>
         <SheetFooter>
           {/* Los enlaces (asChild) no son <button>, así que el reparto del ancho en móvil va explícito. */}
-          {lead.customer ? (
+          {shown.customer ? (
             <Button variant="secondary" asChild className="max-sm:flex-1">
-              <Link href={`/clientes?cliente=${encodeURIComponent(lead.customer)}`}><Users />Ver cliente</Link>
+              <Link href={`/clientes?cliente=${encodeURIComponent(shown.customer)}`}><Users />Ver cliente</Link>
             </Button>
           ) : (
             <Button variant="secondary" disabled title="Esta oportunidad no tiene cliente en el export"><Users />Ver cliente</Button>
           )}
           <Button asChild className="max-sm:flex-1">
-            <Link href={`/correos?lead=${encodeURIComponent(lead.import_key)}`}><Mail />Redactar correo</Link>
+            <Link href={`/correos?lead=${encodeURIComponent(shown.import_key)}`}><Mail />Redactar correo</Link>
           </Button>
         </SheetFooter>
       </SheetContent>

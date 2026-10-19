@@ -1,6 +1,6 @@
 "use client";
 
-import { Copy, RotateCcw } from "lucide-react";
+import { Copy, RotateCcw, Send } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardBody, CardFooter, CardHeader } from "@/components/ui/card";
@@ -11,32 +11,43 @@ import { Tooltip } from "@/components/ui/tooltip";
 import { StepHeader } from "@/components/emails/StepHeader";
 import type { FieldKey, ResolvedField } from "@/components/emails/fields";
 
-/**
- * Paso 3: asunto y cuerpo editables, datos usados y botones de copiar. No envía nada.
- * En móvil el pie queda pegado al fondo (por encima de la barra de pestañas) para tener «Copiar borrador» siempre a mano.
- */
+/** Paso 3: asunto y cuerpo editables. Copiar sigue disponible; encolar deja el correo en la bandeja. */
 export function DraftEditor({
   subject,
   body,
   edited,
   fields,
   usedKeys,
+  fromLabel,
+  recipient,
+  resend,
+  enqueuePending,
   onSubjectChange,
   onBodyChange,
+  onRecipientChange,
+  onResendChange,
   onReset,
   onCopyAll,
   onCopySubject,
+  onEnqueue,
 }: {
   subject: string;
   body: string;
   edited: boolean;
   fields: ResolvedField[];
   usedKeys: FieldKey[];
+  fromLabel: string;
+  recipient: string;
+  resend: boolean;
+  enqueuePending: boolean;
   onSubjectChange: (value: string) => void;
   onBodyChange: (value: string) => void;
+  onRecipientChange: (value: string) => void;
+  onResendChange: (value: boolean) => void;
   onReset: () => void;
   onCopyAll: () => void;
   onCopySubject: () => void;
+  onEnqueue: () => void;
 }) {
   const used = fields.filter((field) => usedKeys.includes(field.key));
   const generic = used.filter((field) => field.generic).length;
@@ -44,7 +55,7 @@ export function DraftEditor({
   return (
     <Card className="flex min-h-full flex-col">
       <CardHeader
-        title={<StepHeader step={3} title="Borrador" hint="Revisa, ajusta lo que quieras y cópialo." />}
+        title={<StepHeader step={3} title="Borrador" hint="Revisa, cópialo o encolalo en la bandeja." />}
         actions={
           edited ? (
             <>
@@ -84,12 +95,25 @@ export function DraftEditor({
           )}
         </div>
       </CardBody>
-      <CardFooter className="max-sm:sticky max-sm:bottom-[calc(3.5rem+env(safe-area-inset-bottom))] max-sm:z-10 max-sm:flex-col-reverse max-sm:items-stretch max-sm:gap-1 max-sm:px-4">
+      <CardFooter className="flex-wrap max-sm:flex-col max-sm:items-stretch">
         <Button variant="secondary" onClick={onCopySubject} className="max-sm:hidden">Copiar solo el asunto</Button>
         <Button variant="link" onClick={onCopySubject} className="sm:hidden">Copiar solo el asunto</Button>
-        <Button onClick={onCopyAll}>
+        <Button variant="secondary" onClick={onCopyAll}>
           <Copy /> Copiar borrador
         </Button>
+        <div className="flex min-w-0 flex-1 flex-col gap-2 sm:min-w-[240px] sm:max-w-xs sm:items-stretch">
+          <Field label="Destinatario" htmlFor="draft-to">
+            <Input id="draft-to" type="email" value={recipient} onChange={(event) => onRecipientChange(event.target.value)} placeholder="cliente@correo.com" />
+          </Field>
+          <p className="text-[11px] text-ink-3">Sale como {fromLabel}</p>
+          <label className="flex items-center gap-2 text-xs text-ink-2">
+            <input type="checkbox" checked={resend} onChange={(event) => onResendChange(event.target.checked)} />
+            Volver a encolar si ya estaba
+          </label>
+          <Button onClick={onEnqueue} loading={enqueuePending} disabled={enqueuePending || !recipient.trim()}>
+            <Send /> Encolar envío
+          </Button>
+        </div>
       </CardFooter>
     </Card>
   );

@@ -50,32 +50,15 @@ Every page and API route requires a signed `crm_session` cookie. Public routes a
 
 ## Cloudflare deploy
 
-Do not put secret values in the repo or in `wrangler.jsonc` `vars`.
+Production deploys from `main` through Cloudflare Workers Builds. The dashboard Git integration creates its own API token. This repository has no GitHub Actions workflow and no Cloudflare token. The exact dashboard fields are in [docs/deploy-cloudflare.md](docs/deploy-cloudflare.md).
 
-1. Create the database and paste the printed `database_id` into `wrangler.jsonc` (`d1_databases[0].database_id`). The committed id is a placeholder.
+The Worker name is `crm-libertario`. The D1 binding `DB` is the existing database `crm-pay-line` (`ded1c012-2e0a-4b1b-9339-24047b32a99e`). `MAIL_MODE` is `gmail_api` and `SHEETS_SYNC_ENABLED` is `false`. Secrets stay out of `wrangler.jsonc`.
 
-```bash
-npx wrangler d1 create crm-pay-line
-```
-
-2. Apply the schema. The app also creates tables on the first request. The migration is the same SQL.
-
-```bash
-npx wrangler d1 migrations apply crm-pay-line --remote
-```
-
-3. Set secrets. Wrangler prompts for the value; nothing is written to the repo.
+Set a secret from a trusted machine. Wrangler prompts for the value.
 
 ```bash
 npx wrangler secret put SESSION_SECRET
 npx wrangler secret put BOOTSTRAP_ADMIN_PASSWORD
-```
-
-4. Build, then deploy when you are ready. This repository does not deploy itself.
-
-```bash
-npm run build
-npx wrangler deploy
 ```
 
 The first request after deploy advances a single D1 batch and creates the bootstrap admin. Later requests keep advancing one batch until the snapshot is complete; the Worker does not remember a finished setup promise. Finish it as an admin by repeating `POST /api/admin/seed` until the JSON `complete` field is true, or run `npm run seed` against a local database. Each call is idempotent. A partial equipment load inserts the missing serials and leaves existing leads in place. The bundled snapshot has 699 leads, 72 activities, 32 teams, and 224 equipment. A bad `BOOTSTRAP_ADMIN_PASSWORD` returns only "No se pudo preparar el acceso inicial."
@@ -94,17 +77,17 @@ On the live Worker, a signed-in admin uses Ajustes or `POST /api/users/reset` in
 | --- | --- | --- | --- |
 | `SESSION_SECRET` | secret | yes | HMAC cookie key, minimum 16 characters |
 | `BOOTSTRAP_ADMIN_PASSWORD` | secret | yes | Initial password for `lidertransformacion@libertariocoffee.com`, minimum 12 characters |
-| `MAIL_MODE` | var | no | Committed as `log`. Sending is a follow-up |
+| `MAIL_MODE` | var | no | Committed as `gmail_api`. `log` only queues |
 | `MAIL_FROM_ADDRESS` | var | no | `lidertransformacion@libertariocoffee.com` |
 | `MAIL_FROM_NAME` | var | no | `Comercial Libertario` |
-| `SHEETS_SYNC_ENABLED` | var | no | Committed as `false`. Dry-run only |
-| `GOOGLE_SHEETS_SPREADSHEET_ID` | var | no | Public sheet id already in the docs |
+| `SHEETS_SYNC_ENABLED` | var | no | Committed as `false`. Dry-run only until `true` |
+| `GOOGLE_SHEETS_SPREADSHEET_ID` | var | no | `1mrb-s2PbDOEvNwdAs2zMyT7czMxx1tqcYGuwk4FQks4` |
 | `GOOGLE_SHEETS_TAB` | var | no | `Listado Equipos` |
 | `BOOTSTRAP_ADMIN_EMAIL` | var | no | Documented only. The address is fixed in code |
-| `GOOGLE_SHEETS_CLIENT_EMAIL` | secret | later | Not used while sync is off |
-| `GOOGLE_SHEETS_PRIVATE_KEY` | secret | later | Not used while sync is off |
-| `GMAIL_TOKEN_JSON` | secret | later | Gmail API, follow-up |
-| `ODOO_AGENT_TOKEN` | secret | later | Ingest token, follow-up |
+| `GOOGLE_SHEETS_CLIENT_EMAIL` | secret | when sync is on | Service account. PKCS8 private key |
+| `GOOGLE_SHEETS_PRIVATE_KEY` | secret | when sync is on | Not used while sync is off |
+| `GMAIL_TOKEN_JSON` | secret | when mail is `gmail_api` | OAuth refresh token JSON: `client_id`, `client_secret`, `refresh_token` |
+| `ODOO_AGENT_TOKEN` | secret | for the browser agent | Bearer token, minimum 16 characters |
 | `CRM_DB_PATH` | local env | no | SQLite path for `next dev` only |
 
 Binding: D1 database `crm-pay-line` as `DB`.
@@ -114,14 +97,26 @@ Binding: D1 database `crm-pay-line` as `DB`.
 - **Comités** — Comité Out of Stores. History, filters, and a copyable summary.
 - **Pay Line** — Kanban of the Odoo lead export. Cards with no expected revenue say “Sin ingreso”.
 - **KPIs** — Open, won, and lost follow Odoo `active` and won/lost status, not the stage alone. On the 15 Oct 2026 export: 169 open, 182 won, 309 lost, 39 recurrente.
-- **Comodatos** — 224 machines. **Ver diff** shows the sheet plan and writes nothing.
+- **Comodatos** — 224 machines. **Ver diff** plans against the bundled CSV while sync is off. **Traer de la hoja** and **Enviar cambios** write only when `SHEETS_SYNC_ENABLED=true`. The sheet is the source on pull. Rows are matched by serial and never deleted.
 - **Clientes** — Timeline of opportunities, activities, committee items, and comodatos.
-- **Correos** — Spanish drafts you copy. There is no send button in this release.
+- **Correos** — Spanish drafts you can copy or queue. **Procesar bandeja** follows `MAIL_MODE`. Production is `gmail_api`: it sends as `Comercial Libertario <lidertransformacion@libertariocoffee.com>` through `users/me/messages/send`, and a cron drains the outbox. `log` leaves the message queued.
 - **Ajustes** — Admins create users.
 - **Cuenta** — Password change.
 
 Rules and the sheet adapter are in [docs/process.md](docs/process.md).
 
-## Follow-up
+## Mail, Sheets, and the Odoo agent
 
-Not in this deploy: email outbox (log / Gmail API), two-way Sheets sync, stable equipment ids, and the authenticated Odoo ingest/outbound queue. Those modules are present and unused, or still throw, so they do not run.
+These routes are in the app. They stay quiet until the matching secret is set. Nothing in this repository calls the Odoo API.
+
+| Route | Auth | What it does |
+| --- | --- | --- |
+| `GET` / `POST /api/correos/outbox` | session | List or enqueue a message |
+| `POST /api/correos/outbox/process` | session | Drain the queue with `MAIL_MODE` |
+| `POST /api/correos/outbox/:id` | session | Requeue a failed message |
+| `POST /api/comodatos/sync` | session | `{ "direction": "pull" }` or `"push"`. Refuses to write while sync is off |
+| `POST /api/agent/ingest` | `Authorization: Bearer` | Snapshot from the browser agent. `mode` is `full` or `incremental` |
+| `GET /api/agent/outbound` | bearer | Pending creates and updates |
+| `POST /api/agent/outbound/:id` | bearer | `{ "odooId" }` or `{ "error" }` |
+
+`GMAIL_TOKEN_JSON` is `{"client_id","client_secret","refresh_token"}`. The live sheet id is `1mrb-s2PbDOEvNwdAs2zMyT7czMxx1tqcYGuwk4FQks4`, tab `Listado Equipos`. The service-account key must be PKCS8 (`BEGIN PRIVATE KEY`). `OdooSyncAdapter` still throws and does not fetch.

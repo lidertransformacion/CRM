@@ -14,8 +14,10 @@ type Plan = { enabled: boolean; mode: "live" | "dry-run"; push: PushPlan; pull: 
 
 function summaryText(plan: Plan): string {
   const lines = [
-    `Comparación con la hoja "Listado Equipos" · modo ${plan.mode === "live" ? "en vivo" : "simulación"} · no se escribió nada.`,
-    `Actualizaciones: ${plan.push.updates.length} · Altas: ${plan.push.inserts.length} · Bajas: ${plan.push.deletes.length} (nunca se borran filas)`,
+    `Comparación con la hoja "Listado Equipos" · modo ${plan.mode === "live" ? "en vivo" : "simulación"}.`,
+    plan.enabled ? "La hoja es la fuente al traer. Enviar escribe solo las celdas distintas, por serial." : "La sincronización está apagada: este resumen no escribe.",
+    `Hacia la hoja: ${plan.push.updates.length} actualizaciones · ${plan.push.inserts.length} altas · ${plan.push.deletes.length} bajas (nunca se borran filas)`,
+    `Desde la hoja: ${plan.pull.updates.length} equipos distintos · ${plan.pull.inserts.length} seriales que faltan aquí · ${plan.pull.localOnly.length} solo en el CRM`,
   ];
   for (const update of plan.push.updates) {
     for (const change of update.changes) lines.push(`${update.serial} · fila ${update.rowNumber} · ${change.column}: "${change.from}" → "${change.to}"`);
@@ -31,6 +33,7 @@ export function SheetDiffDialog({ open, onOpenChange }: { open: boolean; onOpenC
   const [plan, setPlan] = React.useState<Plan | null>(null);
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
+  const [syncing, setSyncing] = React.useState<"pull" | "push" | null>(null);
 
   React.useEffect(() => {
     if (!open) return;
@@ -63,14 +66,37 @@ export function SheetDiffDialog({ open, onOpenChange }: { open: boolean; onOpenC
   }
 
   const changes = plan ? plan.push.updates.flatMap((update) => update.changes.map((change) => ({ ...change, serial: update.serial, rowNumber: update.rowNumber }))) : [];
-  const nothing = plan && changes.length === 0 && plan.push.inserts.length === 0;
+  const nothing = plan && changes.length === 0 && plan.push.inserts.length === 0 && plan.pull.updates.length === 0 && plan.pull.inserts.length === 0;
+
+  async function sync(direction: "pull" | "push") {
+    setSyncing(direction);
+    try {
+      const response = await fetch("/api/comodatos/sync", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ direction }),
+      });
+      const body = (await response.json()) as { error?: string; written?: boolean; reason?: string };
+      if (!response.ok) throw new Error(body.error || "No se pudo sincronizar.");
+      toast({
+        title: body.written ? (direction === "pull" ? "Hoja aplicada" : "Hoja actualizada") : "Sin escritura",
+        description: body.reason,
+        tone: body.written ? "ok" : "info",
+      });
+      if (body.written) onOpenChange(false);
+    } catch (cause) {
+      toast({ title: "No se pudo sincronizar", description: cause instanceof Error ? cause.message : "Error", tone: "danger" });
+    } finally {
+      setSyncing(null);
+    }
+  }
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         size="xl"
         title="Comparar con la hoja de Google"
-        description="Muestra qué celdas de “Listado Equipos” cambiarían con los datos del CRM. No escribe nada: busca cada fila por serial, no borra filas y no toca las columnas de fórmula (Codigo Tienda, idnum)."
+        description="Compara “Listado Equipos” por serial. Traer aplica la hoja al CRM. Enviar escribe solo las celdas distintas y nunca borra filas ni toca las fórmulas (Codigo Tienda, idnum). Con la sincronización apagada no hay escritura."
       >
         <DialogBody className="space-y-4">
           {loading && (
@@ -94,6 +120,9 @@ export function SheetDiffDialog({ open, onOpenChange }: { open: boolean; onOpenC
                   {plan.push.inserts.length} {plan.push.inserts.length === 1 ? "alta" : "altas"}
                 </Badge>
                 <Badge tone="neutral">0 bajas · nunca se borran filas</Badge>
+                <Badge tone={plan.pull.updates.length || plan.pull.inserts.length ? "warn" : "neutral"}>
+                  {plan.pull.updates.length + plan.pull.inserts.length} desde la hoja
+                </Badge>
               </div>
 
               {nothing ? (
@@ -183,6 +212,12 @@ export function SheetDiffDialog({ open, onOpenChange }: { open: boolean; onOpenC
         <DialogFooter>
           <Button variant="secondary" onClick={() => onOpenChange(false)}>
             Cerrar
+          </Button>
+          <Button variant="secondary" onClick={() => void sync("pull")} disabled={!plan || loading || syncing != null} loading={syncing === "pull"}>
+            Traer de la hoja
+          </Button>
+          <Button variant="secondary" onClick={() => void sync("push")} disabled={!plan || loading || syncing != null} loading={syncing === "push"}>
+            Enviar cambios
           </Button>
           <Button onClick={() => void copy()} disabled={!plan || loading}>
             <Copy /> Copiar resumen

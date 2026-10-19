@@ -213,7 +213,28 @@ CREATE TABLE IF NOT EXISTS odoo_sync_log (
   error_text TEXT,
   summary_json TEXT NOT NULL
 );
+CREATE INDEX IF NOT EXISTS leads_stage ON leads(stage);
+CREATE INDEX IF NOT EXISTS leads_customer ON leads(customer);
+CREATE INDEX IF NOT EXISTS leads_salesperson ON leads(salesperson);
+CREATE INDEX IF NOT EXISTS leads_odoo_id ON leads(odoo_id);
+CREATE INDEX IF NOT EXISTS leads_active_won ON leads(active, won_status);
+CREATE INDEX IF NOT EXISTS leads_deadline ON leads(next_activity_deadline);
+CREATE INDEX IF NOT EXISTS activities_lead ON activities(lead_import_key);
+CREATE INDEX IF NOT EXISTS activities_odoo_lead ON activities(odoo_lead_id);
+CREATE INDEX IF NOT EXISTS activities_deadline ON activities(deadline);
+CREATE INDEX IF NOT EXISTS equipment_site ON equipment(site_id, site_seq);
+CREATE INDEX IF NOT EXISTS equipment_client ON equipment(client_name);
+CREATE INDEX IF NOT EXISTS equipment_sheet_serial ON equipment(sheet_serial);
+CREATE INDEX IF NOT EXISTS equipment_history_serial ON equipment_history(serial);
+CREATE INDEX IF NOT EXISTS maintenance_serial_on ON maintenance_logs(serial, performed_on);
+CREATE INDEX IF NOT EXISTS email_outbox_status_next ON email_outbox(status, next_attempt_at);
+CREATE INDEX IF NOT EXISTS odoo_outbound_status ON odoo_outbound(status);
+CREATE INDEX IF NOT EXISTS committee_docs_current ON committee_docs(is_current);
+CREATE INDEX IF NOT EXISTS committee_docs_number ON committee_docs(number);
 `;
+
+/** Bump when SCHEMA gains indexes or columns so an existing D1 applies them once. */
+export const SCHEMA_VERSION = "2";
 
 /** Applied when an older local file is missing columns added after the first release. */
 export const ALTERS = [

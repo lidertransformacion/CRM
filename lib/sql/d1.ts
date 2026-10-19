@@ -63,5 +63,11 @@ export function wrapD1(d1: D1Database): SqlDb {
       const result = await d1.prepare(sql).bind(...params).run();
       return { changes: Number(result.meta?.changes ?? 0), lastInsertRowid: Number(result.meta?.last_row_id ?? 0) };
     },
+    async batch(statements: { sql: string; params?: unknown[] }[]) {
+      if (buffer?.length) await flush();
+      if (!statements.length) return [];
+      const results = await d1.batch(statements.map((stmt) => d1.prepare(stmt.sql).bind(...(stmt.params ?? []))));
+      return results.map((result) => result.results ?? []);
+    },
   };
 }

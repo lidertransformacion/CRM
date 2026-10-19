@@ -42,6 +42,7 @@ export async function sendGmail(message: OutboundMail, fetchImpl: typeof fetch =
   const raw = await readEnv("GMAIL_TOKEN_JSON");
   if (!raw.trim()) throw new Error("Falta GMAIL_TOKEN_JSON.");
   const access = await gmailAccessToken(parseGmailToken(raw), fetchImpl);
+  // The refresh token only includes gmail.send, so this is the only Gmail call.
   const response = await fetchImpl("https://gmail.googleapis.com/gmail/v1/users/me/messages/send", {
     method: "POST",
     headers: { Authorization: `Bearer ${access}`, "Content-Type": "application/json" },

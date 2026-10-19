@@ -49,6 +49,17 @@ export function wrapDatabaseSync(db: DatabaseSync): SqlDb {
       const result = db.prepare(sql).run(...(params as never[]));
       return { changes: Number(result.changes ?? 0), lastInsertRowid: Number(result.lastInsertRowid ?? 0) };
     },
+    async batch(statements: { sql: string; params?: unknown[] }[]) {
+      return statements.map((stmt) => {
+        const params = stmt.params ?? [];
+        const prepared = db.prepare(stmt.sql);
+        if (/^\s*(select|with|pragma)\b/i.test(stmt.sql)) {
+          return (prepared.all(...(params as never[])) as object[]).map((row) => ({ ...row }));
+        }
+        prepared.run(...(params as never[]));
+        return [];
+      });
+    },
   };
 }
 

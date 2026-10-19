@@ -1,10 +1,9 @@
-import { createSign } from "node:crypto";
 import { readEnvSync } from "@/lib/env";
 import { planPull, planPush } from "@/lib/sheets/diff";
 import type { ApplyResult, EquipmentSyncRow, PullPlan, PushPlan, SheetSnapshot } from "@/lib/sheets/types";
 import type { SheetsAdapter } from "@/lib/sheets/adapter";
 
-type LiveConfig = {
+export type LiveConfig = {
   clientEmail: string;
   privateKey: string;
   spreadsheetId: string;
@@ -29,14 +28,31 @@ export function readSheetsConfig(): LiveConfig {
   return { clientEmail, privateKey, spreadsheetId, tabName };
 }
 
-function base64url(value: string | Buffer): string {
-  return Buffer.from(value).toString("base64url");
+function bytesToBase64Url(bytes: Uint8Array): string {
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
 }
 
-async function accessToken(config: LiveConfig): Promise<string> {
-  const now = Math.floor(Date.now() / 1000);
-  const header = base64url(JSON.stringify({ alg: "RS256", typ: "JWT" }));
-  const claim = base64url(
+function textToBase64Url(value: string): string {
+  return bytesToBase64Url(new TextEncoder().encode(value));
+}
+
+function pemToPkcs8(pem: string): ArrayBuffer {
+  if (/BEGIN RSA PRIVATE KEY/.test(pem)) {
+    throw new Error("GOOGLE_SHEETS_PRIVATE_KEY debe ser PKCS8 (BEGIN PRIVATE KEY).");
+  }
+  const body = pem.replace(/-----BEGIN PRIVATE KEY-----/g, "").replace(/-----END PRIVATE KEY-----/g, "").replace(/\s+/g, "");
+  const binary = atob(body);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+  return bytes.buffer;
+}
+
+/** RS256 service-account assertion. Web Crypto so the Worker does not need node:crypto. */
+export async function signServiceAccountJwt(config: Pick<LiveConfig, "clientEmail" | "privateKey">, now = Math.floor(Date.now() / 1000)): Promise<string> {
+  const header = textToBase64Url(JSON.stringify({ alg: "RS256", typ: "JWT" }));
+  const claim = textToBase64Url(
     JSON.stringify({
       iss: config.clientEmail,
       scope: "https://www.googleapis.com/auth/spreadsheets",
@@ -46,14 +62,18 @@ async function accessToken(config: LiveConfig): Promise<string> {
     }),
   );
   const unsigned = `${header}.${claim}`;
-  const signer = createSign("RSA-SHA256");
-  signer.update(unsigned);
-  const assertion = `${unsigned}.${signer.sign(config.privateKey).toString("base64url")}`;
+  const key = await crypto.subtle.importKey("pkcs8", pemToPkcs8(config.privateKey), { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" }, false, ["sign"]);
+  const signature = await crypto.subtle.sign("RSASSA-PKCS1-v1_5", key, new TextEncoder().encode(unsigned));
+  return `${unsigned}.${bytesToBase64Url(new Uint8Array(signature))}`;
+}
+
+export async function googleAccessToken(config: LiveConfig, fetchImpl: typeof fetch = fetch): Promise<string> {
+  const assertion = await signServiceAccountJwt(config);
   const body = new URLSearchParams({
     grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
     assertion,
   });
-  const response = await fetch("https://oauth2.googleapis.com/token", {
+  const response = await fetchImpl("https://oauth2.googleapis.com/token", {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body,
@@ -85,7 +105,7 @@ export class LiveGoogleSheetsAdapter implements SheetsAdapter {
 
   async pull(): Promise<SheetSnapshot> {
     requireEnabled();
-    const token = await accessToken(this.config);
+    const token = await googleAccessToken(this.config);
     const range = encodeURIComponent(this.config.tabName);
     const response = await fetch(
       `https://sheets.googleapis.com/v4/spreadsheets/${this.config.spreadsheetId}/values/${range}`,
@@ -106,11 +126,11 @@ export class LiveGoogleSheetsAdapter implements SheetsAdapter {
     return { spreadsheetId: this.config.spreadsheetId, tabName: this.config.tabName, headers, rows: rows.filter((row) => row.serial) };
   }
 
-  planPush(local: EquipmentSyncRow[]): PushPlan {
+  planPush(_local: EquipmentSyncRow[]): PushPlan {
     throw new Error("planPush en vivo necesita un snapshot fresco. Usa pull() y planPush().");
   }
 
-  planPull(local: EquipmentSyncRow[]): PullPlan {
+  planPull(_local: EquipmentSyncRow[]): PullPlan {
     throw new Error("planPull en vivo necesita un snapshot fresco. Usa pull() y planPull().");
   }
 
@@ -138,7 +158,7 @@ export class LiveGoogleSheetsAdapter implements SheetsAdapter {
       nextRow += 1;
     }
     if (!data.length) return { written: true, reason: "No había cambios.", updates: 0, inserts: 0 };
-    const token = await accessToken(this.config);
+    const token = await googleAccessToken(this.config);
     const response = await fetch(
       `https://sheets.googleapis.com/v4/spreadsheets/${this.config.spreadsheetId}/values:batchUpdate`,
       {

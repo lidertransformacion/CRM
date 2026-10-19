@@ -1,7 +1,7 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "crm-pay-line",
-  "main": "vinext/server/fetch-handler",
+  "name": "crm-libertario",
+  "main": "./worker/index.ts",
   "compatibility_date": "2026-10-19",
   "compatibility_flags": ["nodejs_compat"],
   "assets": {
@@ -15,12 +15,15 @@
     {
       "binding": "DB",
       "database_name": "crm-pay-line",
-      "database_id": "00000000-0000-0000-0000-000000000000",
+      "database_id": "ded1c012-2e0a-4b1b-9339-24047b32a99e",
       "migrations_dir": "migrations"
     }
   ],
+  "triggers": {
+    "crons": ["*/5 * * * *"]
+  },
   "vars": {
-    "MAIL_MODE": "log",
+    "MAIL_MODE": "gmail_api",
     "MAIL_FROM_ADDRESS": "lidertransformacion@libertariocoffee.com",
     "MAIL_FROM_NAME": "Comercial Libertario",
     "SHEETS_SYNC_ENABLED": "false",
