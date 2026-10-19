@@ -8,9 +8,10 @@ import { plural, type PersonSummary } from "@/components/committee/helpers";
 /** Panel lateral: avance por responsable y leyenda de colores. */
 export function PeopleAside({ people, person, onSelect }: { people: PersonSummary[]; person: string | null; onSelect: (key: string | null) => void }) {
   return (
-    <Card className="h-max min-w-0 lg:sticky lg:top-20">
-      <CardHeader title="Pendientes por persona" description="Clic en un nombre para ver solo lo suyo." className="px-4" />
-      <CardBody className="space-y-1 px-2 py-2">
+    <Card className="flex min-w-0 flex-col lg:sticky lg:top-20 lg:max-h-[calc(100dvh-6rem)]">
+      <CardHeader title="Pendientes por persona" description="Clic en un nombre para ver solo lo suyo." className="shrink-0 px-4" />
+      {/* La lista desplaza sola; cabecera y leyenda quedan fijas. */}
+      <CardBody className="min-h-0 flex-1 space-y-1 overflow-y-auto px-2 py-2 max-lg:max-h-80">
         {people.length === 0 && <p className="px-2 py-3 text-xs text-ink-3">No hay pendientes con estos filtros.</p>}
         {people.map((item) => {
           const active = person === item.key;
@@ -49,7 +50,7 @@ export function PeopleAside({ people, person, onSelect }: { people: PersonSummar
           );
         })}
       </CardBody>
-      <CardBody className="border-t border-line-2 px-4 py-3">
+      <CardBody className="shrink-0 border-t border-line-2 px-4 py-3">
         <p className="eyebrow mb-1.5">Leyenda</p>
         <ul className="space-y-1.5 text-xs text-ink-2">
           <li className="flex items-start gap-2">
