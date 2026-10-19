@@ -94,17 +94,17 @@ On the live Worker, a signed-in admin uses Ajustes or `POST /api/users/reset` in
 | --- | --- | --- | --- |
 | `SESSION_SECRET` | secret | yes | HMAC cookie key, minimum 16 characters |
 | `BOOTSTRAP_ADMIN_PASSWORD` | secret | yes | Initial password for `lidertransformacion@libertariocoffee.com`, minimum 12 characters |
-| `MAIL_MODE` | var | no | Committed as `log`. Sending is a follow-up |
+| `MAIL_MODE` | var | no | Committed as `log`. `gmail_api` sends; `log` only records |
 | `MAIL_FROM_ADDRESS` | var | no | `lidertransformacion@libertariocoffee.com` |
 | `MAIL_FROM_NAME` | var | no | `Comercial Libertario` |
-| `SHEETS_SYNC_ENABLED` | var | no | Committed as `false`. Dry-run only |
-| `GOOGLE_SHEETS_SPREADSHEET_ID` | var | no | Public sheet id already in the docs |
+| `SHEETS_SYNC_ENABLED` | var | no | Committed as `false`. Dry-run only until `true` |
+| `GOOGLE_SHEETS_SPREADSHEET_ID` | var | no | `1mrb-s2PbDOEvNwdAs2zMyT7czMxx1tqcYGuwk4FQks4` |
 | `GOOGLE_SHEETS_TAB` | var | no | `Listado Equipos` |
 | `BOOTSTRAP_ADMIN_EMAIL` | var | no | Documented only. The address is fixed in code |
-| `GOOGLE_SHEETS_CLIENT_EMAIL` | secret | later | Not used while sync is off |
-| `GOOGLE_SHEETS_PRIVATE_KEY` | secret | later | Not used while sync is off |
-| `GMAIL_TOKEN_JSON` | secret | later | Gmail API, follow-up |
-| `ODOO_AGENT_TOKEN` | secret | later | Ingest token, follow-up |
+| `GOOGLE_SHEETS_CLIENT_EMAIL` | secret | when sync is on | Service account. PKCS8 private key |
+| `GOOGLE_SHEETS_PRIVATE_KEY` | secret | when sync is on | Not used while sync is off |
+| `GMAIL_TOKEN_JSON` | secret | when mail is `gmail_api` | `client_id`, `client_secret`, `refresh_token` |
+| `ODOO_AGENT_TOKEN` | secret | for the browser agent | Bearer token, minimum 16 characters |
 | `CRM_DB_PATH` | local env | no | SQLite path for `next dev` only |
 
 Binding: D1 database `crm-pay-line` as `DB`.
@@ -114,14 +114,26 @@ Binding: D1 database `crm-pay-line` as `DB`.
 - **Comités** — Comité Out of Stores. History, filters, and a copyable summary.
 - **Pay Line** — Kanban of the Odoo lead export. Cards with no expected revenue say “Sin ingreso”.
 - **KPIs** — Open, won, and lost follow Odoo `active` and won/lost status, not the stage alone. On the 15 Oct 2026 export: 169 open, 182 won, 309 lost, 39 recurrente.
-- **Comodatos** — 224 machines. **Ver diff** shows the sheet plan and writes nothing.
+- **Comodatos** — 224 machines. **Ver diff** plans against the bundled CSV while sync is off. **Traer de la hoja** and **Enviar cambios** write only when `SHEETS_SYNC_ENABLED=true`. The sheet is the source on pull. Rows are matched by serial and never deleted.
 - **Clientes** — Timeline of opportunities, activities, committee items, and comodatos.
-- **Correos** — Spanish drafts you copy. There is no send button in this release.
+- **Correos** — Spanish drafts you can copy or queue. **Procesar bandeja** follows `MAIL_MODE`. The default `log` records the message as `Comercial Libertario <lidertransformacion@libertariocoffee.com>` and does not call Gmail.
 - **Ajustes** — Admins create users.
 - **Cuenta** — Password change.
 
 Rules and the sheet adapter are in [docs/process.md](docs/process.md).
 
-## Follow-up
+## Mail, Sheets, and the Odoo agent
 
-Not in this deploy: email outbox (log / Gmail API), two-way Sheets sync, stable equipment ids, and the authenticated Odoo ingest/outbound queue. Those modules are present and unused, or still throw, so they do not run.
+These routes are in the app. They stay quiet until the matching secret is set. Nothing in this repository calls the Odoo API.
+
+| Route | Auth | What it does |
+| --- | --- | --- |
+| `GET` / `POST /api/correos/outbox` | session | List or enqueue a message |
+| `POST /api/correos/outbox/process` | session | Drain the queue with `MAIL_MODE` |
+| `POST /api/correos/outbox/:id` | session | Requeue a failed message |
+| `POST /api/comodatos/sync` | session | `{ "direction": "pull" }` or `"push"`. Refuses to write while sync is off |
+| `POST /api/agent/ingest` | `Authorization: Bearer` | Snapshot from the browser agent. `mode` is `full` or `incremental` |
+| `GET /api/agent/outbound` | bearer | Pending creates and updates |
+| `POST /api/agent/outbound/:id` | bearer | `{ "odooId" }` or `{ "error" }` |
+
+`GMAIL_TOKEN_JSON` is `{"client_id","client_secret","refresh_token"}`. The live sheet id is `1mrb-s2PbDOEvNwdAs2zMyT7czMxx1tqcYGuwk4FQks4`, tab `Listado Equipos`. The service-account key must be PKCS8 (`BEGIN PRIVATE KEY`). `OdooSyncAdapter` still throws and does not fetch.

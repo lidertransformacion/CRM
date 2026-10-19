@@ -751,12 +751,17 @@ export function toSyncRow(row: EquipmentRow): EquipmentSyncRow {
 }
 
 export async function sheetPlans(db?: unknown) {
-  const snapshot = snapshotFromCsv(await loadImportText("listado_equipos.csv"));
   const local = (await listEquipment(db)).map(toSyncRow);
   const enabled = (await readEnv("SHEETS_SYNC_ENABLED")) === "true";
+  if (enabled) {
+    const { livePlans } = await import("@/lib/sheets/sync");
+    const plans = await livePlans(await rawDb(db));
+    return { enabled: true, mode: "live" as const, push: plans.push, pull: plans.pull };
+  }
+  const snapshot = snapshotFromCsv(await loadImportText("listado_equipos.csv"));
   return {
-    enabled,
-    mode: enabled ? "live" : "dry-run",
+    enabled: false,
+    mode: "dry-run" as const,
     push: planPush(local, snapshot),
     pull: planPull(local, snapshot),
   };

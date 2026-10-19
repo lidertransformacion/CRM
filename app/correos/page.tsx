@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Drafts } from "@/components/emails/Drafts";
 import { findLeadByKey, listEmailTemplates } from "@/lib/emails/queries";
+import { fromIdentity } from "@/lib/mail/message";
 
 export const dynamic = "force-dynamic";
 export const metadata: Metadata = { title: "Correos" };
@@ -19,10 +20,18 @@ function first(value: string | string[] | undefined): string | null {
  */
 export default async function CorreosPage({ searchParams }: { searchParams: SearchParams }) {
   const params = await searchParams;
-  const templates = await listEmailTemplates();
+  const [templates, from] = await Promise.all([listEmailTemplates(), fromIdentity()]);
   const leadKey = first(params.lead);
   const lead = leadKey ? await findLeadByKey(leadKey) : null;
   const templateParam = first(params.plantilla);
   const templateId = templateParam && templates.some((template) => template.id === templateParam) ? templateParam : null;
-  return <Drafts templates={templates} initialTemplateId={templateId} initialLead={lead} missingLeadKey={leadKey && !lead ? leadKey : null} />;
+  return (
+    <Drafts
+      templates={templates}
+      initialTemplateId={templateId}
+      initialLead={lead}
+      missingLeadKey={leadKey && !lead ? leadKey : null}
+      fromLabel={`${from.name} <${from.address}>`}
+    />
+  );
 }

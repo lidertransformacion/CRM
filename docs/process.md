@@ -119,7 +119,7 @@ Next maintenance is the last log date plus the frequency. With no logs and no de
 
 ## Google Sheets
 
-The live workbook the team uses is “Listado Equipos”, spreadsheet id `1mrb-s2PbDOEvNwdAs2zMyT7czMxx1tqcYGuwk4FQks4`. This app does not call it. The id is not a default in code. A future operator sets `GOOGLE_SHEETS_SPREADSHEET_ID` themselves.
+The live workbook the team uses is “Listado Equipos”, spreadsheet id `1mrb-s2PbDOEvNwdAs2zMyT7czMxx1tqcYGuwk4FQks4`, tab `Listado Equipos`. Those values are the committed defaults. The app calls the sheet only when `SHEETS_SYNC_ENABLED=true`.
 
 The adapter upserts by serial, never by row number. It keeps the sheet’s columns and order. It never deletes rows. Formula columns `Codigo Tienda` and `idnum` are never written. `Duracción` keeps the sheet’s spelling.
 
@@ -127,8 +127,12 @@ Until a field is edited, a push writes the original cell, so the seed diff is em
 
 When site is dirty, the note says the local code and sequence changed, and the formula columns stay untouched. Outbound `Ubicación` is the site name. Outbound `ID` is the site id.
 
-`getSheetsAdapter()` returns the dry-run adapter unless `SHEETS_SYNC_ENABLED` is exactly `true`. Only then does it load `lib/sheets/live.ts`. The live constructor throws if that variable is not `true`. Credentials, when used later, are `GOOGLE_SHEETS_CLIENT_EMAIL`, `GOOGLE_SHEETS_PRIVATE_KEY`, `GOOGLE_SHEETS_SPREADSHEET_ID`, and optional `GOOGLE_SHEETS_TAB` (default `Listado Equipos`). **Ver diff** plans against the bundled CSV and reports that nothing was written.
+`getSheetsAdapter()` returns the dry-run adapter unless `SHEETS_SYNC_ENABLED` is exactly `true`. Only then does it load `lib/sheets/live.ts`. The live constructor throws if that variable is not `true`. Credentials are `GOOGLE_SHEETS_CLIENT_EMAIL`, `GOOGLE_SHEETS_PRIVATE_KEY` (PKCS8), `GOOGLE_SHEETS_SPREADSHEET_ID`, and optional `GOOGLE_SHEETS_TAB` (default `Listado Equipos`). The JWT is signed with Web Crypto. **Ver diff** plans against the bundled CSV while sync is off. **Traer de la hoja** copies the sheet onto local equipment and leaves serials that exist only in the CRM. **Enviar cambios** writes the push plan by serial. Both refuse to write while sync is off.
 
 ## Correos
 
-Templates are seeded in `email_templates` and rendered in the browser. Copy puts plain text on the clipboard. There is no `mailto` and no mail transport.
+Templates are seeded in `email_templates` and rendered in the browser. Copy puts plain text on the clipboard. **Encolar envío** inserts `email_outbox`. **Procesar bandeja** calls `deliverMail`. The default `MAIL_MODE=log` records the message from `Comercial Libertario <lidertransformacion@libertariocoffee.com>` and does not call Gmail. `gmail_api` uses `GMAIL_TOKEN_JSON`. A recipient with `email_opt_out` is skipped. The same dedupe key is not queued twice unless the sender asks to send again.
+
+## Odoo agent
+
+`POST /api/agent/ingest`, `GET /api/agent/outbound`, and `POST /api/agent/outbound/:id` accept a bearer `ODOO_AGENT_TOKEN` of at least 16 characters. The browser agent pushes snapshots and acks the outbound queue. `OdooSyncAdapter` still throws and does not open a connection to Odoo. A full ingest archives leads whose `odoo_id` is missing from the snapshot, except rows waiting on `pending_create`.

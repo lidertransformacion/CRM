@@ -231,4 +231,29 @@ describe("middleware", () => {
     expect(password.status).not.toBe(401);
     expect(password.status).not.toBe(403);
   });
+
+  it("lets the Odoo browser agent through with its bearer token", async () => {
+    process.env.SESSION_SECRET = SECRET;
+    const previousToken = process.env.ODOO_AGENT_TOKEN;
+    const token = "agent-token-value-16";
+    process.env.ODOO_AGENT_TOKEN = token;
+    const allowed = await middleware(
+      new NextRequest("http://localhost/api/agent/ingest", { headers: { authorization: `Bearer ${token}` } }),
+    );
+    expect(allowed.headers.get("location")).toBeNull();
+    expect(allowed.status).not.toBe(401);
+    const missing = await middleware(new NextRequest("http://localhost/api/agent/outbound"));
+    expect(missing.status).toBe(401);
+    const wrong = await middleware(
+      new NextRequest("http://localhost/api/agent/outbound", { headers: { authorization: "Bearer not-the-token-value" } }),
+    );
+    expect(wrong.status).toBe(401);
+    process.env.ODOO_AGENT_TOKEN = "short";
+    const short = await middleware(
+      new NextRequest("http://localhost/api/agent/outbound", { headers: { authorization: "Bearer short" } }),
+    );
+    expect(short.status).toBe(401);
+    if (previousToken == null) delete process.env.ODOO_AGENT_TOKEN;
+    else process.env.ODOO_AGENT_TOKEN = previousToken;
+  });
 });
