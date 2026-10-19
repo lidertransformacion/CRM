@@ -1,10 +1,8 @@
-# CRM Pay Line
+# CRM Comercial · Libertario Coffee Roasters
 
-Local tool for the Comercial team at Libertario Coffee Roasters. The interface is in Spanish. It runs on your machine: committees, the Pay Line pipeline, salesperson KPIs, comodatos, client timelines, and copyable email drafts.
+Herramienta local del equipo Comercial. Corre en tu máquina, la interfaz está en español y los datos viven en un archivo SQLite. No envía correos, no llama a Odoo y no escribe en Google Sheets.
 
-Nothing here sends mail, calls Odoo, or writes to Google Sheets.
-
-## Run
+## Arrancar
 
 ```bash
 npm install
@@ -12,32 +10,40 @@ npm test
 npm run dev
 ```
 
-Open [http://127.0.0.1:4317](http://127.0.0.1:4317). The first request creates `data/crm.sqlite` and seeds it from `data/imports/`.
+Abre [http://127.0.0.1:4317](http://127.0.0.1:4317). La primera petición crea `data/crm.sqlite` y lo siembra desde `data/imports/`.
 
-| Command | What it does |
+| Comando | Qué hace |
 | --- | --- |
-| `npm run dev` | Next.js on port 4317 |
-| `npm test` | Vitest |
-| `npm run import:odoo` | Reimport the three Odoo `.xlsx` files and reapply local lead edits |
-| `npm start` | Production server on port 4317, after `npm run build` |
+| `npm run dev` | Next.js en el puerto 4317 |
+| `npm test` | Pruebas con Vitest |
+| `npm run build` y `npm start` | Build y servidor de producción en el 4317 |
+| `npm run lint` | ESLint |
+| `npm run import:odoo` | Reimporta los tres `.xlsx` de Odoo y reaplica los cambios locales de etapa |
 
-`npm run import:odoo -- path/leads.xlsx path/activities.xlsx path/teams.xlsx` uses other files. The defaults live in `data/imports/`.
+`npm run import:odoo -- ruta/leads.xlsx ruta/activities.xlsx ruta/teams.xlsx` usa otros archivos. Los de ejemplo están en `data/imports/`.
 
-## What is on screen
+## Qué hay en pantalla
 
-- **Comités** — Comité Out of Stores, seeded from the 14 Oct 2026 acta. History, person filters, age badges, and a copyable summary email.
-- **Pay Line** — Kanban of the Odoo lead export. Stage changes stay in SQLite.
-- **KPIs** — Open, won, lost, win rate, expected revenue, overdue activities, and stage age, from that export. Targets start empty.
-- **Comodatos** — 224 machines from Listado Equipos. Create and edit from the side form. Each serial has a life sheet, a QR code, and a maintenance form. **Ver diff** shows the Google Sheet plan and writes nothing.
-- **Clientes** — Timeline of opportunities, activities, committee items, and comodatos.
-- **Correos** — Spanish drafts you copy. There is no send button.
+Menú lateral con siete secciones y un buscador global (`⌘K` / `Ctrl K`) que encuentra clientes, equipos y oportunidades desde cualquier pantalla.
 
-Rules, counts, and the sheet adapter are in [docs/process.md](docs/process.md).
+- **Inicio** — Qué requiere atención hoy: pendientes vencidos y arrastrados, oportunidades con actividad vencida, equipos con garantía vencida o mantenimiento pendiente, y el estado del comité en curso. Cada indicador lleva a la lista filtrada.
+- **Comités** — El acta viva del Comité Out of Stores: temas, puntos, decisiones y pendientes con responsable, fecha y antigüedad (cuántos comités lleva sin cerrarse). Vista por tema o por persona, comités anteriores en solo lectura, comparación entre actas, exportación CSV/JSON y correo resumen listo para copiar.
+- **Pipeline (Pay Line)** — Tablero por etapa del export de Odoo, con vista de lista. Cada oportunidad se abre en un panel lateral con sus datos y actividades; la etapa se cambia arrastrando o desde el panel. Los cambios se guardan en SQLite, no en Odoo.
+- **KPIs** — Resultados del equipo y de cada vendedor: abiertas, ganadas, perdidas, tasa de cierre, ingreso esperado y ponderado, actividades vencidas y antigüedad por etapa. Metas por vendedor, métrica y mes con progreso.
+- **Equipos** — Los 224 equipos en tiendas y en comodato. Tabla completa con filtros, panel lateral para crear o editar, hoja de vida por serial con QR, historial y registro de mantenimientos. "Comparar con la hoja de Google" muestra qué celdas cambiarían y no escribe nada.
+- **Clientes** — Línea de tiempo por cliente: oportunidades, actividades, pendientes de comité y equipos.
+- **Correos** — Elige plantilla y oportunidad, revisa el borrador y cópialo. No hay botón de enviar.
 
-## Sheets sync
+Las reglas de negocio (arrastre, vencidos, códigos de tienda, garantías, costos) están en [docs/process.md](docs/process.md). La guía de diseño y el catálogo de componentes, en [docs/DESIGN.md](docs/DESIGN.md).
 
-Sync is off unless `SHEETS_SYNC_ENABLED=true`. Credentials are environment variables only. Copy `.env.example` to `.env.local` when you are ready to turn it on later. Do not put secrets in the repo. The live sheet is not a default target in code.
+## Diseño
 
-## Data
+La interfaz usa la marca Libertario (navy `#182B55`, crema `#E8E4DE`, Poppins y Libre Baskerville), la misma de libertariocoffee.com y de las otras apps internas. Los tokens están en `app/globals.css`; las primitivas (botones, campos, tablas, paneles, avisos) en `components/ui`.
 
-`data/crm.sqlite` is gitignored. Delete it to reseed. Committee and equipment edits live only in that file.
+## Sincronización con Google Sheets
+
+Apagada salvo que `SHEETS_SYNC_ENABLED=true`. Las credenciales van solo en variables de entorno: copia `.env.example` a `.env.local` cuando vayas a activarla. No pongas secretos en el repo. La hoja real no es un destino por defecto en el código.
+
+## Datos
+
+`data/crm.sqlite` está en `.gitignore`. Bórralo para volver a sembrar. Las ediciones de comités, equipos, metas y etapas viven solo en ese archivo.

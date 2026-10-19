@@ -1,72 +1,141 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { renderTemplate, type EmailTemplate } from "@/lib/emails/templates";
-import { cop, displaySeller } from "@/lib/utils";
+import { Card, CardBody, CardHeader } from "@/components/ui/card";
+import { EmptyState } from "@/components/ui/empty-state";
+import { PageHeader } from "@/components/ui/page-header";
+import { useToast } from "@/components/ui/toast";
+import { DraftEditor } from "@/components/emails/DraftEditor";
+import { LeadPicker, type LeadMode } from "@/components/emails/LeadPicker";
+import { StepHeader } from "@/components/emails/StepHeader";
+import { TemplatePicker } from "@/components/emails/TemplatePicker";
+import { buildFields, toDraftFields, usedFieldKeys, type LeadSummary } from "@/components/emails/fields";
 
-type Lead = { import_key: string; name: string; customer: string; salesperson: string; stage: string; expected_revenue: number | null };
+/**
+ * Pantalla de correos en tres pasos: plantilla → oportunidad → borrador.
+ * El borrador se arma en el navegador con `renderTemplate`; copiar es la única acción. Nunca se envía nada.
+ */
+export function Drafts({
+  templates,
+  initialTemplateId,
+  initialLead,
+  missingLeadKey,
+}: {
+  templates: EmailTemplate[];
+  initialTemplateId: string | null;
+  initialLead: LeadSummary | null;
+  missingLeadKey: string | null;
+}) {
+  const { toast } = useToast();
+  const [templateId, setTemplateId] = useState(initialTemplateId ?? templates[0]?.id ?? "");
+  const [lead, setLead] = useState<LeadSummary | null>(initialLead);
+  const [mode, setMode] = useState<LeadMode>(initialLead ? "chosen" : "search");
+  const [subjectOverride, setSubjectOverride] = useState<string | null>(null);
+  const [bodyOverride, setBodyOverride] = useState<string | null>(null);
+  const warnedMissing = useRef(false);
+  const touched = useRef(false);
 
-export function Drafts({ templates }: { templates: EmailTemplate[] }) {
-  const [templateId, setTemplateId] = useState(templates[0]?.id ?? "");
-  const [q, setQ] = useState("");
-  const [leads, setLeads] = useState<Lead[]>([]);
-  const [lead, setLead] = useState<Lead | null>(null);
   const template = templates.find((item) => item.id === templateId) ?? templates[0];
-  const draft = template
-    ? renderTemplate(template, {
-        cliente: lead?.customer || "el cliente",
-        oportunidad: lead?.name || "la oportunidad",
-        vendedor: displaySeller(lead?.salesperson),
-        ingreso: lead?.expected_revenue ? cop(lead.expected_revenue) : "por confirmar",
-        etapa: lead?.stage || "la etapa actual",
-        fecha: "",
-      })
-    : { subject: "", body: "" };
-  const [subject, setSubject] = useState("");
-  const [body, setBody] = useState("");
-  const [copied, setCopied] = useState(false);
-  const shownSubject = subject || draft.subject;
-  const shownBody = body || draft.body;
+  const fields = useMemo(() => buildFields(lead), [lead]);
+  const usedKeys = useMemo(() => (template ? usedFieldKeys(template) : []), [template]);
+  const rendered = useMemo(() => (template ? renderTemplate(template, toDraftFields(fields)) : { subject: "", body: "" }), [template, fields]);
+
+  const subject = subjectOverride ?? rendered.subject;
+  const body = bodyOverride ?? rendered.body;
+  const edited = subject !== rendered.subject || body !== rendered.body;
+
+  // Aviso único si el enlace traía una oportunidad que ya no existe en el export.
+  useEffect(() => {
+    if (!missingLeadKey || warnedMissing.current) return;
+    warnedMissing.current = true;
+    toast({ title: "No encontramos esa oportunidad", description: "El enlace apuntaba a una oportunidad que no está en el export. Búscala por nombre en el paso 2.", tone: "warn" });
+  }, [missingLeadKey, toast]);
+
+  // Mantiene el deep link al día (solo después de que el usuario eligió algo) para poder compartir la URL.
+  useEffect(() => {
+    if (!touched.current) return;
+    const url = new URL(window.location.href);
+    if (lead) url.searchParams.set("lead", lead.import_key);
+    else url.searchParams.delete("lead");
+    if (templateId) url.searchParams.set("plantilla", templateId);
+    if (url.href !== window.location.href) window.history.replaceState(window.history.state, "", url);
+  }, [lead, templateId]);
+
+  function resetDraft(reason?: string) {
+    if (edited && reason) toast({ title: "Borrador armado de nuevo", description: reason, tone: "info" });
+    setSubjectOverride(null);
+    setBodyOverride(null);
+  }
+
+  function chooseTemplate(id: string) {
+    if (id === templateId) return;
+    touched.current = true;
+    setTemplateId(id);
+    resetDraft("Cambiaste la plantilla, así que se descartaron tus cambios.");
+  }
+
+  function chooseLead(next: LeadSummary) {
+    touched.current = true;
+    setLead(next);
+    setMode("chosen");
+    resetDraft("Cambiaste la oportunidad, así que se rellenaron los datos otra vez.");
+  }
+
+  function chooseGeneric() {
+    touched.current = true;
+    setLead(null);
+    setMode("generic");
+    resetDraft("Ahora el borrador usa texto genérico.");
+  }
+
+  async function copy(text: string, title: string, description: string) {
+    try {
+      await navigator.clipboard.writeText(text);
+      toast({ title, description });
+    } catch {
+      toast({ title: "No se pudo copiar", description: "Selecciona el texto del borrador y cópialo con Ctrl+C o Cmd+C.", tone: "danger" });
+    }
+  }
 
   return (
-    <main className="mx-auto grid max-w-5xl gap-4 px-4 py-6 lg:grid-cols-[280px_minmax(0,1fr)]">
-      <section>
-        <p className="text-xs tracking-[0.16em] text-[#98a2b3]">COMERCIAL</p>
-        <h1 className="font-serif text-4xl">Correos</h1>
-        <p className="mt-2 text-sm text-[#667085]">Solo se copia un borrador. Este módulo no envía correos.</p>
-        <div className="mt-3 space-y-2">
-          {templates.map((item) => (
-            <button key={item.id} onClick={() => { setTemplateId(item.id); setSubject(""); setBody(""); }} className={`block w-full rounded-2xl px-3 py-2 text-left text-sm ${item.id === template?.id ? "bg-[var(--navy)] text-white" : "bg-white"}`}>
-              {item.name}
-            </button>
-          ))}
-        </div>
-      </section>
-      <section className="rounded-3xl bg-white p-5 shadow-sm">
-        <input className="h-10 w-full rounded-xl border px-3 text-sm" placeholder="Buscar oportunidad" value={q} onChange={async (event) => {
-          setQ(event.target.value);
-          const response = await fetch(`/api/leads?q=${encodeURIComponent(event.target.value)}`);
-          const payload = (await response.json()) as { leads: Lead[] };
-          setLeads(payload.leads);
-        }} />
-        {leads.length > 0 && (
-          <div className="mt-2 max-h-36 overflow-auto">
-            {leads.map((item) => (
-              <button key={item.import_key} className="block w-full py-1 text-left text-sm" onClick={() => { setLead(item); setSubject(""); setBody(""); setLeads([]); }}>
-                {item.customer || item.name}
-              </button>
-            ))}
+    <div className="page">
+      <PageHeader eyebrow="Comercial" title="Correos" description="Elige una plantilla y una oportunidad; el borrador se arma solo y lo copias a tu correo. Aquí no se envía nada." />
+
+      {templates.length === 0 ? (
+        <Card>
+          <EmptyState title="No hay plantillas" description="Las plantillas se cargan en la base al iniciar el CRM. Reinicia el servidor o importa los datos de nuevo." />
+        </Card>
+      ) : (
+        <div className="grid gap-4 lg:grid-cols-[380px_minmax(0,1fr)] lg:items-start">
+          <div className="space-y-4">
+            <Card>
+              <CardHeader title={<StepHeader step={1} title="Plantilla" hint="El asunto de ejemplo muestra entre corchetes lo que se rellena." done />}  />
+              <CardBody>
+                <TemplatePicker templates={templates} value={template?.id ?? ""} onChange={chooseTemplate} />
+              </CardBody>
+            </Card>
+            <Card>
+              <CardHeader title={<StepHeader step={2} title="Oportunidad" hint="Rellena cliente, vendedor, etapa e ingreso." done={!!lead || mode === "generic"} />}  />
+              <CardBody>
+                <LeadPicker mode={mode} lead={lead} onChoose={chooseLead} onGeneric={chooseGeneric} onChange={() => setMode("search")} onKeep={() => setMode("chosen")} />
+              </CardBody>
+            </Card>
           </div>
-        )}
-        <label className="mt-4 block text-xs text-[#667085]">Asunto
-          <input className="mt-1 h-10 w-full rounded-xl border px-3 text-sm text-[var(--ink)]" value={shownSubject} onChange={(event) => setSubject(event.target.value)} />
-        </label>
-        <textarea className="mt-3 min-h-72 w-full rounded-2xl border p-3 text-sm" value={shownBody} onChange={(event) => setBody(event.target.value)} />
-        <button className="mt-3 rounded-full bg-[var(--blue)] px-4 py-2 text-sm text-white" onClick={async () => {
-          await navigator.clipboard.writeText(`Asunto: ${shownSubject}\n\n${shownBody}`);
-          setCopied(true);
-        }}>{copied ? "Copiado" : "Copiar borrador"}</button>
-      </section>
-    </main>
+          <DraftEditor
+            subject={subject}
+            body={body}
+            edited={edited}
+            fields={fields}
+            usedKeys={usedKeys}
+            onSubjectChange={setSubjectOverride}
+            onBodyChange={setBodyOverride}
+            onReset={() => resetDraft()}
+            onCopyAll={() => void copy(`Asunto: ${subject}\n\n${body}`, "Borrador copiado", "Pégalo en Outlook o Gmail.")}
+            onCopySubject={() => void copy(subject, "Asunto copiado", "Pégalo en el campo Asunto de tu correo.")}
+          />
+        </div>
+      )}
+    </div>
   );
 }

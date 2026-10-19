@@ -1,488 +1,587 @@
 "use client";
 
-import { useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
-import { Calendar, ChevronDown, Link2, Mail, Plus, X } from "lucide-react";
-import { buildCommitteeEmail } from "@/lib/committee/email";
-import { carryCount, carryTone, isOpen, matchesPerson, personStats, puntoHasOpen, topicIsClosed, topicStats, boardStats } from "@/lib/committee/metrics";
+import { Download, Ellipsis, FileSpreadsheet, GitCompare, LayoutList, ListChecks, Lock, Mail, Plus, RefreshCw, Users } from "lucide-react";
+import { flatten, matchesPerson, topicIsClosed } from "@/lib/committee/metrics";
 import { applyAction } from "@/lib/committee/mutate";
-import type { CommitteeAction, CommitteeDoc, Pendiente, Punto, Topic } from "@/lib/committee/types";
+import type { CommitteeAction, CommitteeDoc } from "@/lib/committee/types";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import { cn, longDate, shortDate, todayIso, uid } from "@/lib/utils";
+import { Card } from "@/components/ui/card";
+import { Chip } from "@/components/ui/chip";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { EditableText } from "@/components/ui/editable";
+import { EmptyState } from "@/components/ui/empty-state";
+import { PageHeader, Toolbar } from "@/components/ui/page-header";
+import { Segmented } from "@/components/ui/segmented";
+import { Select } from "@/components/ui/select";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Stat, StatGrid } from "@/components/ui/stat";
+import { SaveIndicator, useToast } from "@/components/ui/toast";
+import { Tooltip } from "@/components/ui/tooltip";
+import { cn, longDate, shortDate, uid } from "@/lib/utils";
+import { AttachLinkDialog, ConfirmDialog, EmailDialog, LeadLinkDialog, NewCommitteeDialog, OriginDialog } from "@/components/committee/dialogs";
+import { PeopleAside } from "@/components/committee/PeopleAside";
+import { PersonView } from "@/components/committee/PersonView";
+import { TopicCard } from "@/components/committee/TopicCard";
+import {
+  DEFAULT_FILTERS,
+  isNarrow,
+  matchesFilters,
+  peopleSummary,
+  personLabel,
+  plural,
+  resolvePersonKey,
+  summarize,
+  topicVisible,
+  type BoardDialog,
+  type Filters,
+  type Focus,
+  type SaveState,
+  type ViewMode,
+} from "@/components/committee/helpers";
 
-const TAGS = ["Operaciones", "Logística", "IT", "Mercadeo", "Finanzas"];
-const STATUSES = [
-  { id: "pendiente", label: "Pendiente" },
-  { id: "en_curso", label: "En curso" },
-  { id: "cerrado", label: "Cerrado" },
-] as const;
+export type HistoryRow = { number: number; held_on: string; is_current: number; snapshot: boolean };
 
-type HistoryRow = { number: number; held_on: string; is_current: number; snapshot: boolean };
+type Mode = "live" | "snapshot" | "cohort" | "loading";
 
-export function CommitteeBoard({ initialDoc, history }: { initialDoc: CommitteeDoc; history: HistoryRow[] }) {
+export function CommitteeBoard({
+  initialDoc,
+  history,
+  asOf,
+  initialPerson = null,
+  initialView = "topic",
+  openEmail = false,
+  initialCommittee = null,
+}: {
+  initialDoc: CommitteeDoc;
+  history: HistoryRow[];
+  /** Fecha de hoy (ISO) calculada en el servidor para que cliente y servidor coincidan. */
+  asOf: string;
+  /** Deep links: `?persona=`, `?vista=persona`, `?correo=1`, `?comite=N`. */
+  initialPerson?: string | null;
+  initialView?: ViewMode;
+  openEmail?: boolean;
+  initialCommittee?: number | null;
+}) {
+  const { toast } = useToast();
   const [doc, setDoc] = useState(initialDoc);
-  const [archive, setArchive] = useState<CommitteeDoc[]>([]);
+  const docRef = useRef(initialDoc);
+  const [archive, setArchive] = useState<Record<number, CommitteeDoc>>({});
   const [menu, setMenu] = useState(history);
-  const [viewing, setViewing] = useState(initialDoc.committee.number);
-  const [showClosed, setShowClosed] = useState(false);
-  const [person, setPerson] = useState<string | null>(null);
-  const [emailOpen, setEmailOpen] = useState(false);
+  const [viewing, setViewing] = useState(() =>
+    initialCommittee != null && history.some((item) => item.number === initialCommittee) ? initialCommittee : initialDoc.committee.number,
+  );
+  const [filters, setFilters] = useState<Filters>({ ...DEFAULT_FILTERS, person: resolvePersonKey(initialDoc, initialPerson) });
+  const [view, setView] = useState<ViewMode>(initialView);
+  const [save, setSave] = useState<SaveState>("saved");
+  const [emailOpen, setEmailOpen] = useState(openEmail);
   const [nextOpen, setNextOpen] = useState(false);
-  const [nextDate, setNextDate] = useState(todayIso());
-  const [linkFor, setLinkFor] = useState<{ topicId: string; puntoId: string; pendienteId?: string } | null>(null);
-  const [save, setSave] = useState<"saved" | "saving" | "error">("saved");
-  const queue = useRef(Promise.resolve());
-  const asOf = todayIso();
+  const [dialog, setDialog] = useState<BoardDialog | null>(null);
+  const [freshId, setFreshId] = useState<string | null>(null);
+
+  /* ── Modo: acta actual, acta archivada, cohorte o cargando ────────────── */
   const live = viewing === doc.committee.number;
-  const snapshot = archive.find((item) => item.committee.number === viewing);
-  const cohort = !live && !snapshot;
-  const shown = live ? doc : snapshot ?? doc;
+  const menuRow = menu.find((item) => item.number === viewing);
+  const snapshot = live ? null : (archive[viewing] ?? null);
+  const mode: Mode = live ? "live" : snapshot ? "snapshot" : menuRow?.snapshot ? "loading" : "cohort";
+  const shown = live ? doc : (snapshot ?? doc);
   const readOnly = !live;
+  const heldOn = mode === "cohort" ? (menuRow?.held_on ?? shown.committee.heldOn) : shown.committee.heldOn;
+
+  useEffect(() => {
+    if (mode !== "loading") return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const response = await fetch(`/api/committee?number=${viewing}`);
+        if (!response.ok) throw new Error();
+        const payload = (await response.json()) as { doc: CommitteeDoc };
+        if (!cancelled) setArchive((items) => ({ ...items, [viewing]: payload.doc }));
+      } catch {
+        if (cancelled) return;
+        toast({ title: "No se pudo cargar ese comité", description: "Vuelves al comité actual.", tone: "danger" });
+        setViewing(docRef.current.committee.number);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [mode, viewing, toast]);
+
+  /* ── Cola de guardado: una acción tras otra, en orden; si una falla se detiene ── */
+  const pending = useRef<CommitteeAction[]>([]);
+  const flushing = useRef(false);
+  const errored = useRef(false);
+
+  async function flush() {
+    if (flushing.current || errored.current) return;
+    flushing.current = true;
+    while (pending.current.length) {
+      const action = pending.current[0];
+      try {
+        const response = await fetch("/api/committee", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(action),
+        });
+        if (!response.ok) {
+          const payload = (await response.json().catch(() => ({}))) as { error?: string };
+          throw new Error(payload.error ?? `Error ${response.status}`);
+        }
+        const payload = (await response.json()) as { doc: CommitteeDoc; history: HistoryRow[] };
+        pending.current.shift();
+        if (action.type === "newCommittee") {
+          docRef.current = payload.doc;
+          setDoc(payload.doc);
+          setMenu(payload.history);
+          setViewing(payload.doc.committee.number);
+          toast({ title: `Comité #${payload.doc.committee.number} creado`, description: "Los pendientes abiertos pasaron al comité nuevo." });
+        }
+      } catch (error) {
+        errored.current = true;
+        flushing.current = false;
+        setSave("error");
+        toast({
+          title: "No se pudo guardar",
+          description: `${error instanceof Error ? error.message : "Sin conexión"}. Los cambios siguen en pantalla: pulsa «Reintentar».`,
+          tone: "danger",
+        });
+        return;
+      }
+    }
+    flushing.current = false;
+    setSave("saved");
+  }
+
+  function retry() {
+    errored.current = false;
+    setSave("saving");
+    void flush();
+  }
 
   function commit(action: CommitteeAction) {
     if (readOnly) return;
-    setDoc((current) => applyAction(current, action));
+    let next: CommitteeDoc;
+    try {
+      next = applyAction(docRef.current, action);
+    } catch (error) {
+      toast({ title: "No se pudo aplicar el cambio", description: error instanceof Error ? error.message : undefined, tone: "danger" });
+      return;
+    }
+    if (action.type === "newCommittee") {
+      const previous = docRef.current;
+      setArchive((items) => ({ ...items, [previous.committee.number]: previous }));
+      setViewing(next.committee.number);
+    }
+    docRef.current = next;
+    setDoc(next);
+    setFreshId(action.type.startsWith("add") && "id" in action ? action.id : null);
+    pending.current.push(action);
     setSave("saving");
-    queue.current = queue.current.then(async () => {
-      const response = await fetch("/api/committee", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(action),
-      });
-      if (!response.ok) {
-        setSave("error");
-        return;
-      }
-      const payload = (await response.json()) as { doc: CommitteeDoc; history: HistoryRow[] };
-      if (action.type === "newCommittee") {
-        setArchive((items) => [...items, doc]);
-        setDoc(payload.doc);
-        setMenu(payload.history);
-        setViewing(payload.doc.committee.number);
-      }
-      setSave("saved");
-    });
+    void flush();
   }
 
-  const stats = boardStats(shown, asOf);
-  const people = personStats(shown, asOf);
-  const closedCount = stats.closed;
-  const openTopics = shown.topics.filter((topic) => !topicIsClosed(topic)).sort((a, b) => a.number - b.number);
-  const closedTopics = shown.topics.filter((topic) => topicIsClosed(topic)).sort((a, b) => a.number - b.number);
+  /* ── Filas y resúmenes ────────────────────────────────────────────────── */
+  const effectiveFilters = useMemo<Filters>(() => ({ ...filters, born: mode === "cohort" ? viewing : null }), [filters, mode, viewing]);
+  const scopedRows = useMemo(() => {
+    const rows = flatten(shown);
+    return mode === "cohort" ? rows.filter((row) => row.pendiente.bornCommitteeNumber === viewing) : rows;
+  }, [shown, mode, viewing]);
+  const personRows = useMemo(() => scopedRows.filter((row) => matchesPerson(row.pendiente, filters.person)), [scopedRows, filters.person]);
+  const stats = useMemo(() => summarize(shown, personRows, asOf), [shown, personRows, asOf]);
+  const people = useMemo(() => peopleSummary(shown, scopedRows, asOf), [shown, scopedRows, asOf]);
+  const visibleRows = useMemo(() => scopedRows.filter((row) => matchesFilters(shown, row.pendiente, effectiveFilters, asOf)), [scopedRows, shown, effectiveFilters, asOf]);
 
+  const openTopics = useMemo(() => shown.topics.filter((topic) => !topicIsClosed(topic)).sort((a, b) => a.number - b.number), [shown]);
+  const closedTopics = useMemo(() => shown.topics.filter(topicIsClosed).sort((a, b) => a.number - b.number), [shown]);
+  const visibleOpen = openTopics.filter((topic) => topicVisible(shown, topic, effectiveFilters, asOf));
+  const visibleClosed = closedTopics.filter((topic) => topicVisible(shown, topic, effectiveFilters, asOf));
+
+  function setPerson(person: string | null) {
+    setFilters((current) => ({ ...current, person }));
+  }
+  function toggleFocus(focus: Exclude<Focus, null>) {
+    setFilters((current) => ({ ...current, focus: current.focus === focus ? null : focus, scope: focus === "closedSince" ? "closed" : "open" }));
+  }
+  function clearFilters() {
+    setFilters(DEFAULT_FILTERS);
+  }
+  const showAll = () => setFilters((current) => ({ ...current, scope: "all", focus: null }));
+
+  /* ── Deep links: la URL refleja persona, vista y comité ───────────────── */
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (filters.person) params.set("persona", personLabel(filters.person));
+    else params.delete("persona");
+    if (view === "person") params.set("vista", "persona");
+    else params.delete("vista");
+    if (viewing !== doc.committee.number) params.set("comite", String(viewing));
+    else params.delete("comite");
+    params.delete("correo");
+    const query = params.toString();
+    window.history.replaceState(window.history.state, "", `${window.location.pathname}${query ? `?${query}` : ""}`);
+  }, [filters.person, view, viewing, doc.committee.number]);
+
+  /* ── Diálogos de confirmación derivados del estado ────────────────────── */
+  const confirm = useMemo<{ title: string; description: ReactNode; label: string; action: CommitteeAction } | null>(() => {
+    if (!dialog) return null;
+    switch (dialog.kind) {
+      case "delete":
+        return {
+          title: "Eliminar pendiente",
+          description: <>Se elimina «{dialog.title.trim() || "pendiente sin título"}» del acta. Esta acción no se puede deshacer.</>,
+          label: "Eliminar pendiente",
+          action: { type: "deletePendiente", topicId: dialog.target.topicId, puntoId: dialog.target.puntoId, pendienteId: dialog.target.pendienteId },
+        };
+      case "deletePunto":
+        return {
+          title: "Eliminar punto",
+          description: (
+            <>
+              Se elimina «{dialog.title.trim() || "punto sin nombre"}»{dialog.count > 0 ? ` con sus ${plural(dialog.count, "pendiente", "pendientes")}` : ""}. Esta acción no se puede deshacer.
+            </>
+          ),
+          label: "Eliminar punto",
+          action: { type: "deletePunto", topicId: dialog.target.topicId, puntoId: dialog.target.puntoId },
+        };
+      case "deleteDecision":
+        return {
+          title: "Quitar decisión",
+          description: <>Se quita la decisión «{dialog.body.trim() || "sin texto"}» del tema.</>,
+          label: "Quitar decisión",
+          action: { type: "deleteDecision", topicId: dialog.topicId, decisionId: dialog.decisionId },
+        };
+      case "deleteTopic":
+        return {
+          title: "Eliminar tema",
+          description: (
+            <>
+              Se elimina «{dialog.title.trim() || "tema sin nombre"}» con {plural(dialog.puntos, "punto", "puntos")} y {plural(dialog.pendientes, "pendiente", "pendientes")}. Esta acción no se puede deshacer.
+            </>
+          ),
+          label: "Eliminar tema",
+          action: { type: "deleteTopic", topicId: dialog.topicId },
+        };
+      default:
+        return null;
+    }
+  }, [dialog]);
+
+  const closeDialog = (open: boolean) => {
+    if (!open) setDialog(null);
+  };
+  const narrow = isNarrow(effectiveFilters);
+  const nothingVisible = view === "topic" ? visibleOpen.length === 0 && visibleClosed.length === 0 : visibleRows.length === 0;
+
+  /* ── Render ───────────────────────────────────────────────────────────── */
   return (
-    <div className="mx-auto grid max-w-[1280px] gap-4 px-4 py-5 lg:grid-cols-[minmax(0,1fr)_300px]">
-      <div className="space-y-4">
-        <section className="rounded-3xl bg-[var(--navy)] px-5 py-5 text-white shadow-sm sm:px-7">
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <p className="text-[11px] tracking-[0.18em] text-white/60">
-              {shown.committee.area} · {cohort ? "COHORTE" : "COMITÉ"} #{cohort ? viewing : shown.committee.number}
-            </p>
-            <div className="flex flex-wrap items-center gap-2">
-              <Button size="sm" onClick={() => setEmailOpen(true)} disabled={!live}>
-                <Mail className="h-4 w-4" /> Correo resumen
-              </Button>
-              <Button size="sm" variant="outline" className="border-white/20 bg-white/10 text-white hover:bg-white/15" onClick={() => setNextOpen(true)} disabled={readOnly}>
-                <Plus className="h-4 w-4" /> Nuevo comité
-              </Button>
-              <span className="inline-flex items-center gap-1.5 text-xs text-emerald-300">
-                <span className={cn("h-1.5 w-1.5 rounded-full", save === "error" ? "bg-rose-400" : "bg-emerald-400")} />
-                {save === "saving" ? "Guardando" : save === "error" ? "Error al guardar" : "Guardado"}
-              </span>
-            </div>
-          </div>
-          <input
-            className="mt-1 w-full bg-transparent font-serif text-4xl text-white outline-none"
+    <div className="page">
+      <PageHeader
+        eyebrow={`${mode === "cohort" ? "Cohorte · " : ""}Comité #${viewing} · ${longDate(heldOn)} · ${shown.committee.area}`}
+        title={
+          <EditableText
+            as="span"
             value={shown.committee.title}
+            onCommit={(title) => commit({ type: "patchCommittee", patch: { title } })}
+            placeholder="Nombre del comité"
+            ariaLabel="Título del comité"
             disabled={readOnly}
-            onChange={(event) => commit({ type: "patchCommittee", patch: { title: event.target.value } })}
           />
-          <div className="mt-4 flex flex-wrap gap-2 text-sm">
-            <span className="rounded-full bg-white/10 px-3 py-1">{longDate(cohort ? (menu.find((item) => item.number === viewing)?.held_on ?? shown.committee.heldOn) : shown.committee.heldOn)}</span>
-            <span className="rounded-full bg-white/10 px-3 py-1">{stats.open} abiertos</span>
-            <span className="rounded-full bg-rose-500/90 px-3 py-1">{stats.overdue} vencidos</span>
-            <span className="rounded-full bg-rose-500/90 px-3 py-1">{stats.carried} con 2+ comités</span>
-            <select
-              className="rounded-full bg-white/10 px-3 py-1 outline-none"
-              value={viewing}
-              onChange={(event) => setViewing(Number(event.target.value))}
-            >
-              {menu.map((item) => (
-                <option key={item.number} value={item.number} className="text-black">
-                  Comité #{item.number} · {shortDate(item.held_on)}
-                  {item.is_current ? " · actual" : item.snapshot ? "" : " · cohorte"}
-                </option>
-              ))}
-            </select>
+        }
+        description="Actas, decisiones y pendientes por responsable. Los cambios se guardan solos."
+        actions={
+          /* El contenedor de acciones de PageHeader no encoge; el tope al ancho del viewport evita desbordar a 390 px. */
+          <div className="flex max-w-[calc(100vw-2rem)] flex-wrap items-center gap-2">
+            <span className="inline-flex items-center gap-2 sm:mr-1">
+              <SaveIndicator state={save} />
+              {save === "error" && (
+                <Button size="sm" variant="danger-soft" onClick={retry}>
+                  <RefreshCw /> Reintentar
+                </Button>
+              )}
+            </span>
+            <Button variant="secondary" onClick={() => setNextOpen(true)} disabled={readOnly}>
+              <Plus /> Nuevo comité
+            </Button>
+            <Button onClick={() => setEmailOpen(true)} disabled={mode === "cohort" || mode === "loading"}>
+              <Mail /> Correo resumen
+            </Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="secondary" size="icon" aria-label="Más acciones">
+                  <Ellipsis />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent>
+                <DropdownMenuItem asChild>
+                  <a href="/api/committee/export?format=csv">
+                    <FileSpreadsheet /> Exportar CSV
+                  </a>
+                </DropdownMenuItem>
+                <DropdownMenuItem asChild>
+                  <a href="/api/committee/export?format=json">
+                    <Download /> Exportar JSON
+                  </a>
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem asChild>
+                  <Link href="/comites/comparar">
+                    <GitCompare /> Comparar comités
+                  </Link>
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           </div>
-        </section>
-
-        {!live && (
-          <p className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-            {cohort
-              ? `Cohorte del ${shortDate(menu.find((item) => item.number === viewing)?.held_on ?? "")}. El acta completa empieza en el comité #7; aquí está lo que nació en esa fecha.`
-              : "Estás viendo un comité anterior, solo lectura."}
-          </p>
-        )}
-
-        <div className="flex flex-wrap items-center gap-2">
-          <FilterChip active={!person} onClick={() => setPerson(null)}>Todos</FilterChip>
-          {people.map((item) => (
-            <FilterChip key={item.key} active={person === item.key} alert={item.overdue > 0 || item.carried > 0} onClick={() => setPerson(item.key)}>
-              {item.name} {item.open}
-            </FilterChip>
-          ))}
-          <button className="ml-auto text-sm text-[var(--blue)]" onClick={() => setShowClosed((value) => !value)}>
-            {showClosed ? "Ocultar cerrados" : `Ver cerrados (${closedCount})`}
-          </button>
-        </div>
-
-        {cohort && <CohortList doc={doc} number={viewing} asOf={asOf} />}
-        {!cohort && openTopics.map((topic) => (
-          <TopicCard key={topic.id} topic={topic} doc={shown} asOf={asOf} person={person} showClosed={showClosed} readOnly={readOnly} onAction={commit} onLink={setLinkFor} />
-        ))}
-        {!cohort && showClosed && closedTopics.length > 0 && (
-          <div className="space-y-3">
-            <h2 className="text-xs font-semibold tracking-[0.16em] text-[#98a2b3]">TEMAS CERRADOS</h2>
-            {closedTopics.map((topic) => (
-              <TopicCard key={topic.id} topic={topic} doc={shown} asOf={asOf} person={person} showClosed onLink={setLinkFor} readOnly={readOnly} onAction={commit} />
+        }
+      >
+        <Toolbar>
+          <Segmented
+            ariaLabel="Qué pendientes ver"
+            value={filters.scope}
+            onChange={(scope) => setFilters((current) => ({ ...current, scope, focus: null }))}
+            options={[
+              { value: "open", label: "Abiertos", count: stats.open },
+              { value: "all", label: "Todos", count: stats.total },
+              { value: "closed", label: "Cerrados", count: stats.closed, tone: "ok" },
+            ]}
+          />
+          <Segmented
+            ariaLabel="Vista"
+            value={view}
+            onChange={setView}
+            options={[
+              { value: "topic", label: <><LayoutList className="size-3.5" aria-hidden /> Por tema</> },
+              { value: "person", label: <><Users className="size-3.5" aria-hidden /> Por persona</> },
+            ]}
+          />
+          <Select aria-label="Comité que estás viendo" value={viewing} onChange={(event) => setViewing(Number(event.target.value))} className="w-full sm:ml-auto sm:w-auto sm:min-w-[240px]">
+            {menu.map((item) => (
+              <option key={item.number} value={item.number}>
+                Comité #{item.number} · {shortDate(item.held_on)} · {item.is_current ? "actual" : item.snapshot ? "acta archivada" : "cohorte"}
+              </option>
             ))}
+          </Select>
+          <div className="flex w-full flex-wrap items-center gap-1.5" role="group" aria-label="Filtrar por responsable">
+            <Chip active={!filters.person} onClick={() => setPerson(null)}>Todos</Chip>
+            {people.map((item) => {
+              const active = filters.person === item.key;
+              /* En "Abiertos" no tiene sentido un chip con 0 abiertos; en "Todos" o "Cerrados" sí. */
+              if (item.open === 0 && filters.scope === "open" && !active) return null;
+              return (
+                <Chip key={item.key} active={active} alert={!active && (item.overdue > 0 || item.carried > 0)} count={item.open} onClick={() => setPerson(active ? null : item.key)}>
+                  {item.name}
+                </Chip>
+              );
+            })}
           </div>
-        )}
-        {!readOnly && (
-          <button className="w-full rounded-2xl border border-dashed border-[#cfd5e4] py-3 text-sm text-[#667085]" onClick={() => commit({ type: "addTopic", id: uid() })}>
-            + Nuevo tema
-          </button>
-        )}
-        <div className="flex gap-3 text-sm">
-          <a className="text-[var(--blue)]" href="/api/committee/export?format=csv">Exportar CSV</a>
-          <a className="text-[var(--blue)]" href="/api/committee/export?format=json">Exportar JSON</a>
-          <Link className="text-[var(--blue)]" href="/comites/comparar">Comparar comités</Link>
-        </div>
-      </div>
+        </Toolbar>
+      </PageHeader>
 
-      <aside className="h-max rounded-3xl bg-white p-4 shadow-sm lg:sticky lg:top-20">
-        <h2 className="font-semibold">Pendientes por persona</h2>
-        <p className="mb-3 text-xs text-[#667085]">Clic en un nombre para ver solo lo suyo.</p>
-        <div className="space-y-1">
-          {people.map((item) => (
-            <button key={item.key} onClick={() => setPerson(person === item.key ? null : item.key)} className={cn("flex w-full items-center justify-between rounded-xl px-2 py-1.5 text-left text-sm", person === item.key && "bg-[#eef2ff]")}>
-              <span>{item.name} <span className="text-[#667085]">{item.open}</span></span>
-              <span className="flex gap-1 text-[11px]">
-                {item.overdue > 0 && <span className="text-rose-600">{item.overdue} venc.</span>}
-                {item.carried > 0 && <span className="rounded-full bg-rose-50 px-1.5 text-rose-600">{item.carried} arrastr.</span>}
-              </span>
-            </button>
-          ))}
+      {readOnly && (
+        <div role="status" className="mb-4 flex flex-wrap items-center gap-3 rounded-lg border border-[#ead9a3] bg-warn-soft/60 px-4 py-3 text-sm text-ink-2">
+          <Badge tone="warn"><Lock className="size-3" /> Solo lectura</Badge>
+          <span className="min-w-0 flex-1">
+            {mode === "cohort"
+              ? `Cohorte del comité #${viewing} (${longDate(heldOn)}): los pendientes que nacieron ese día, vistos desde el acta actual (#${doc.committee.number}).`
+              : mode === "snapshot"
+                ? `Acta archivada del comité #${viewing} (${longDate(heldOn)}). Para editar, vuelve al comité actual.`
+                : "Cargando el acta archivada…"}
+          </span>
+          <Button variant="link" size="sm" onClick={() => setViewing(doc.committee.number)}>
+            Volver al comité #{doc.committee.number}
+          </Button>
         </div>
-        <div className="mt-4 space-y-1 text-xs text-[#667085]">
-          <p className="flex items-center gap-2"><i className="h-2.5 w-2.5 rounded-sm bg-amber-400" /> 1 comité sin resolver</p>
-          <p className="flex items-center gap-2"><i className="h-2.5 w-2.5 rounded-sm bg-rose-500" /> 2+ comités sin resolver</p>
-          <p className="flex items-center gap-2"><i className="h-2.5 w-2.5 rounded-sm border border-rose-500" /> Fecha vencida</p>
+      )}
+
+      <StatGrid className="mb-5 md:grid-cols-4 xl:grid-cols-4">
+        <StatButton
+          label="Abiertos"
+          value={stats.open}
+          hint={`de ${plural(stats.total, "pendiente", "pendientes")}${filters.person ? ` de ${personLabel(filters.person)}` : ""}`}
+          tooltip="Pendientes que no están cerrados, sin importar la fecha."
+          active={filters.scope === "open" && !filters.focus}
+          onClick={() => setFilters((current) => ({ ...current, scope: "open", focus: null }))}
+        />
+        <StatButton
+          label="Vencidos"
+          value={stats.overdue}
+          tone={stats.overdue > 0 ? "danger" : "neutral"}
+          hint="fecha límite ya pasada"
+          tooltip="Vencido: pendiente abierto cuya fecha límite ya pasó."
+          active={filters.focus === "overdue"}
+          onClick={() => toggleFocus("overdue")}
+        />
+        <StatButton
+          label="Arrastrados 2+"
+          value={stats.carried}
+          tone={stats.carried > 0 ? "danger" : "neutral"}
+          hint="2 o más comités sin cerrar"
+          tooltip="Arrastrado: lleva 2 o más comités sin cerrarse (comité actual menos comité en el que nació)."
+          active={filters.focus === "carried"}
+          onClick={() => toggleFocus("carried")}
+        />
+        <StatButton
+          label="Cerrados desde el último comité"
+          value={stats.closedSince}
+          tone="ok"
+          hint={`cerrados en el comité #${shown.committee.number}`}
+          tooltip="Pendientes marcados como cerrados en este comité. Son los que salen en el correo resumen."
+          active={filters.focus === "closedSince"}
+          onClick={() => toggleFocus("closedSince")}
+        />
+      </StatGrid>
+
+      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_300px]">
+        <div className="min-w-0 space-y-4">
+          {mode === "loading" ? (
+            <div className="space-y-3" aria-busy="true">
+              <Skeleton className="h-24 w-full" />
+              <Skeleton className="h-40 w-full" />
+              <Skeleton className="h-40 w-full" />
+            </div>
+          ) : nothingVisible ? (
+            <Card>
+              <EmptyState
+                icon={<ListChecks />}
+                title={narrow || filters.scope !== "open" ? "Nada que mostrar con estos filtros" : "No hay pendientes abiertos"}
+                description={
+                  narrow || filters.scope !== "open"
+                    ? "Prueba con «Todos» o quita el filtro de persona para ver el resto del acta."
+                    : readOnly
+                      ? "Esta acta no tiene pendientes abiertos."
+                      : "Crea un tema y empieza a registrar puntos y pendientes."
+                }
+                action={
+                  narrow || filters.scope !== "open" ? (
+                    <Button variant="secondary" onClick={clearFilters}>Quitar filtros</Button>
+                  ) : !readOnly ? (
+                    <Button onClick={() => commit({ type: "addTopic", id: uid() })}>
+                      <Plus /> Nuevo tema
+                    </Button>
+                  ) : undefined
+                }
+              />
+            </Card>
+          ) : view === "person" ? (
+            <PersonView doc={shown} rows={visibleRows} asOf={asOf} readOnly={readOnly} freshId={freshId} onAction={commit} onDialog={setDialog} onClearFilters={clearFilters} />
+          ) : (
+            <>
+              {visibleOpen.map((topic) => (
+                <TopicCard key={topic.id} topic={topic} doc={shown} asOf={asOf} filters={effectiveFilters} readOnly={readOnly} freshId={freshId} onAction={commit} onDialog={setDialog} onShowAll={showAll} />
+              ))}
+              {visibleClosed.length > 0 && (
+                <section className="space-y-4" aria-label="Temas cerrados">
+                  <h2 className="eyebrow flex items-center gap-2 pt-2 font-sans">
+                    Temas cerrados <Badge tone="ok" size="sm">{visibleClosed.length}</Badge>
+                  </h2>
+                  {visibleClosed.map((topic) => (
+                    <TopicCard key={topic.id} topic={topic} doc={shown} asOf={asOf} filters={effectiveFilters} readOnly={readOnly} freshId={freshId} onAction={commit} onDialog={setDialog} onShowAll={showAll} />
+                  ))}
+                </section>
+              )}
+            </>
+          )}
+
+          {!readOnly && view === "topic" && !nothingVisible && (
+            <Button variant="secondary" className="w-full border-dashed" onClick={() => commit({ type: "addTopic", id: uid() })}>
+              <Plus /> Nuevo tema
+            </Button>
+          )}
+
+          {mode !== "loading" && view === "topic" && filters.scope === "open" && closedTopics.length > 0 && !narrow && (
+            <p className="text-center text-xs text-ink-3">
+              {plural(closedTopics.length, "tema cerrado oculto", "temas cerrados ocultos")} ·{" "}
+              <button type="button" className="text-navy-2 underline-offset-4 hover:underline" onClick={showAll}>
+                ver todos
+              </button>
+            </p>
+          )}
         </div>
-        <Button className="mt-4 w-full" variant="outline" onClick={() => setEmailOpen(true)}>Redactar correo del comité</Button>
-      </aside>
+
+        <PeopleAside people={people} person={filters.person} onSelect={setPerson} />
+      </div>
 
       <EmailDialog open={emailOpen} onOpenChange={setEmailOpen} doc={shown} asOf={asOf} />
-      <Dialog open={nextOpen} onOpenChange={setNextOpen}>
-        <DialogContent className="p-6">
-          <DialogTitle>Nuevo comité</DialogTitle>
-          <p className="mt-2 text-sm text-[#667085]">Los pendientes abiertos pasan al comité nuevo y suman un comité de arrastre. Los cerrados quedan en el historial.</p>
-          <label className="mt-4 block text-sm">Fecha
-            <Input className="mt-1" type="date" value={nextDate} onChange={(event) => setNextDate(event.target.value)} />
-          </label>
-          <Button className="mt-4" onClick={() => { commit({ type: "newCommittee", heldOn: nextDate }); setNextOpen(false); }}>Crear comité</Button>
-        </DialogContent>
-      </Dialog>
-      <LeadLinker open={!!linkFor} onOpenChange={(open) => !open && setLinkFor(null)} onPick={(key) => {
-        if (!linkFor) return;
-        if (linkFor.pendienteId) commit({ type: "patchPendiente", ...linkFor, pendienteId: linkFor.pendienteId, patch: { leadImportKey: key } });
-        else commit({ type: "linkPunto", topicId: linkFor.topicId, puntoId: linkFor.puntoId, leadImportKey: key });
-        setLinkFor(null);
-      }} />
+      <NewCommitteeDialog open={nextOpen} onOpenChange={setNextOpen} doc={doc} asOf={asOf} onCreate={(heldOn) => commit({ type: "newCommittee", heldOn })} />
+      <LeadLinkDialog
+        open={dialog?.kind === "link"}
+        onOpenChange={closeDialog}
+        current={dialog?.kind === "link" ? dialog.current : null}
+        onPick={(key) => {
+          if (dialog?.kind !== "link") return;
+          const { topicId, puntoId, pendienteId } = dialog.target;
+          if (pendienteId) commit({ type: "patchPendiente", topicId, puntoId, pendienteId, patch: { leadImportKey: key } });
+          else commit({ type: "linkPunto", topicId, puntoId, leadImportKey: key });
+          setDialog(null);
+        }}
+      />
+      <OriginDialog
+        open={dialog?.kind === "origin"}
+        onOpenChange={closeDialog}
+        doc={shown}
+        current={dialog?.kind === "origin" ? dialog.current : shown.committee.number}
+        onSave={(number) => {
+          if (dialog?.kind !== "origin") return;
+          commit({ type: "patchPendiente", ...dialog.target, patch: { bornCommitteeNumber: number } });
+        }}
+      />
+      <AttachLinkDialog
+        open={dialog?.kind === "attach"}
+        onOpenChange={closeDialog}
+        onAdd={(label, url) => {
+          if (dialog?.kind !== "attach") return;
+          commit({ type: "addLink", topicId: dialog.target.topicId, puntoId: dialog.target.puntoId, id: uid(), label, url });
+        }}
+      />
+      <ConfirmDialog
+        open={!!confirm}
+        onOpenChange={closeDialog}
+        title={confirm?.title ?? ""}
+        description={confirm?.description}
+        confirmLabel={confirm?.label ?? "Eliminar"}
+        onConfirm={() => {
+          if (confirm) commit(confirm.action);
+        }}
+      />
     </div>
   );
 }
 
-function CohortList({ doc, number, asOf }: { doc: CommitteeDoc; number: number; asOf: string }) {
-  const rows = doc.topics.flatMap((topic) =>
-    topic.puntos.flatMap((punto) =>
-      punto.pendientes
-        .filter((item) => item.bornCommitteeNumber === number)
-        .map((item) => ({ topic, punto, item, open: isOpen(item), overdue: isOpen(item) && !!item.dueOn && item.dueOn < asOf })),
-    ),
-  );
-  if (!rows.length) return <p className="rounded-2xl bg-white p-4 text-sm text-[#667085]">No hay pendientes nacidos en este comité dentro del tablero actual.</p>;
-  return (
-    <div className="space-y-2">
-      {rows.map((row) => (
-        <div key={row.item.id} className="rounded-2xl bg-white px-4 py-3 text-sm shadow-sm">
-          <p className="text-xs text-[#667085]">{row.topic.title} · {row.punto.title}</p>
-          <p className={cn("font-medium", !row.open && "line-through text-[#98a2b3]")}>{row.item.title || "(sin título)"}</p>
-          <p className="text-xs text-[#667085]">{row.item.owners.join(", ") || "Sin responsable"} · {row.item.dueOn ? shortDate(row.item.dueOn) : "Sin fecha"}{row.overdue ? " · Vencido" : ""} · {row.open ? "Abierto" : "Cerrado"}</p>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function FilterChip({ active, alert, children, onClick }: { active?: boolean; alert?: boolean; children: ReactNode; onClick: () => void }) {
-  return (
-    <button onClick={onClick} className={cn("rounded-full border bg-white px-3 py-1 text-sm", active ? "border-[var(--navy)] bg-[var(--navy)] text-white" : alert ? "border-rose-300 text-rose-700" : "border-[#e1e5ef]")}>
-      {children}
-    </button>
-  );
-}
-
-function TopicCard({ topic, doc, asOf, person, showClosed, readOnly, onAction, onLink }: {
-  topic: Topic; doc: CommitteeDoc; asOf: string; person: string | null; showClosed: boolean; readOnly: boolean;
-  onAction: (action: CommitteeAction) => void;
-  onLink: (target: { topicId: string; puntoId: string; pendienteId?: string }) => void;
+/** Indicador clicable: aplica el filtro correspondiente y se marca cuando está activo. */
+function StatButton({
+  active,
+  onClick,
+  tooltip,
+  tone = "neutral",
+  ...stat
+}: {
+  label: ReactNode;
+  value: ReactNode;
+  hint?: ReactNode;
+  tone?: "neutral" | "ok" | "warn" | "danger" | "info";
+  active: boolean;
+  tooltip: string;
+  onClick: () => void;
 }) {
-  const stats = topicStats(doc, topic);
-  const puntos = topic.puntos.filter((punto) => {
-    if (person && !punto.pendientes.some((item) => matchesPerson(item, person) && (showClosed || isOpen(item)))) return false;
-    if (!showClosed && punto.pendientes.length > 0 && !puntoHasOpen(punto)) return false;
-    return true;
-  });
-  if (person && puntos.length === 0) return null;
   return (
-    <article className="rounded-3xl bg-white p-4 shadow-sm sm:p-5">
-      <div className="flex flex-wrap items-start gap-3">
-        <input disabled={readOnly} className="w-12 bg-transparent text-3xl font-semibold outline-none" type="number" value={topic.number} onChange={(event) => onAction({ type: "patchTopic", topicId: topic.id, patch: { number: Number(event.target.value) } })} />
-        <div className="min-w-0 flex-1">
-          <input disabled={readOnly} className="w-full bg-transparent text-xl font-semibold outline-none" value={topic.title} onChange={(event) => onAction({ type: "patchTopic", topicId: topic.id, patch: { title: event.target.value } })} />
-          <textarea disabled={readOnly} className="mt-1 w-full resize-none bg-transparent text-sm text-[#667085] outline-none" rows={topic.context ? 2 : 1} placeholder="Contexto del tema (opcional)" value={topic.context} onChange={(event) => onAction({ type: "patchTopic", topicId: topic.id, patch: { context: event.target.value } })} />
-        </div>
-        <label className="flex items-center gap-1 rounded-full border border-[#e6e8ef] px-2 py-1 text-sm">
-          <input disabled={readOnly} className="w-12 bg-transparent text-right outline-none" type="number" value={topic.minutes ?? ""} placeholder="min" onChange={(event) => onAction({ type: "patchTopic", topicId: topic.id, patch: { minutes: event.target.value === "" ? null : Number(event.target.value) } })} />
-          min
-          {!readOnly && <button onClick={() => onAction({ type: "patchTopic", topicId: topic.id, patch: { minutes: null } })} aria-label="Quitar tiempo"><X className="h-3.5 w-3.5" /></button>}
-        </label>
+    <Tooltip content={tooltip}>
+      <div
+        role="button"
+        tabIndex={0}
+        aria-pressed={active}
+        onClick={onClick}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            onClick();
+          }
+        }}
+        className="cursor-pointer rounded-xl outline-none focus-visible:ring-2 focus-visible:ring-navy-2/40"
+      >
+        <Stat {...stat} tone={tone} className={cn("h-full transition-colors hover:border-line hover:bg-surface-2", active && "border-navy bg-accent-soft/50 ring-1 ring-navy")} />
       </div>
-      <div className="mt-2 flex flex-wrap items-center gap-2">
-        {TAGS.map((tag) => {
-          const on = topic.tags.includes(tag);
-          return (
-            <button key={tag} disabled={readOnly} onClick={() => onAction({ type: "patchTopic", topicId: topic.id, patch: { tags: on ? topic.tags.filter((item) => item !== tag) : [...topic.tags, tag] } })} className={cn("rounded-full px-2 py-0.5 text-[11px] tracking-wide", on ? "bg-[#eef2ff] text-[#3146b5]" : "border border-dashed border-[#d5d9e4] text-[#98a2b3]")}>
-              {tag.toUpperCase()}
-            </button>
-          );
-        })}
-        {topicIsClosed(topic) && <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] text-emerald-700">CERRADO</span>}
-        <span className="ml-auto text-sm text-[#667085]">{stats.open} {stats.open === 1 ? "abierto" : "abiertos"}{stats.carried > 0 && <> · <span className="text-rose-600">{stats.carried} {stats.carried === 1 ? "arrastrado" : "arrastrados"}</span></>}</span>
-      </div>
-      {topic.decisions.map((decision) => (
-        <div key={decision.id} className="mt-3 rounded-2xl bg-[#f4f7ff] p-3 text-sm">
-          <textarea disabled={readOnly} className="w-full bg-transparent outline-none" value={decision.body} onChange={(event) => onAction({ type: "patchDecision", topicId: topic.id, decisionId: decision.id, body: event.target.value })} />
-        </div>
-      ))}
-      {!readOnly && <button className="mt-3 text-sm text-[var(--blue)]" onClick={() => onAction({ type: "addDecision", topicId: topic.id, id: uid(), body: "" })}>◆ + Decisión clave</button>}
-      <div className="mt-3 space-y-3">
-        {puntos.map((punto) => (
-          <PuntoCard key={punto.id} punto={punto} topic={topic} doc={doc} asOf={asOf} person={person} showClosed={showClosed} readOnly={readOnly} onAction={onAction} onLink={onLink} />
-        ))}
-      </div>
-      {!readOnly && <button className="mt-3 text-sm text-[#667085]" onClick={() => onAction({ type: "addPunto", topicId: topic.id, id: uid() })}>+ Agregar punto</button>}
-    </article>
-  );
-}
-
-function PuntoCard({ punto, topic, doc, asOf, person, showClosed, readOnly, onAction, onLink }: {
-  punto: Punto; topic: Topic; doc: CommitteeDoc; asOf: string; person: string | null; showClosed: boolean; readOnly: boolean;
-  onAction: (action: CommitteeAction) => void;
-  onLink: (target: { topicId: string; puntoId: string; pendienteId?: string }) => void;
-}) {
-  const [actaOpen, setActaOpen] = useState(false);
-  const [linkOpen, setLinkOpen] = useState(false);
-  const [label, setLabel] = useState("");
-  const [url, setUrl] = useState("");
-  const visible = punto.pendientes.filter((item) => matchesPerson(item, person) && (showClosed || isOpen(item)));
-  const hidden = punto.pendientes.filter((item) => !showClosed && !isOpen(item)).length;
-  const closed = punto.pendientes.filter((item) => !isOpen(item)).length;
-  const total = punto.pendientes.length;
-  const red = punto.pendientes.some((item) => isOpen(item) && carryCount(doc, item) >= 2);
-  return (
-    <div className="rounded-2xl border border-[#eceff5] p-3">
-      <div className="flex items-start gap-2">
-        <div className="min-w-0 flex-1">
-          <input disabled={readOnly} className="w-full bg-transparent font-medium outline-none" placeholder="Nombre del punto" value={punto.title} onChange={(event) => onAction({ type: "patchPunto", topicId: topic.id, puntoId: punto.id, patch: { title: event.target.value } })} />
-          <input disabled={readOnly} className="mt-1 w-full bg-transparent text-sm text-[#667085] outline-none" placeholder="Subtítulo" value={punto.subtitle} onChange={(event) => onAction({ type: "patchPunto", topicId: topic.id, puntoId: punto.id, patch: { subtitle: event.target.value } })} />
-        </div>
-        <span className={cn("rounded-full border px-2 py-0.5 text-xs", red ? "border-rose-400 text-rose-600" : "border-[#e4e7ef] text-[#667085]")}>{closed}/{total}</span>
-        {!readOnly && <button onClick={() => onAction({ type: "deletePunto", topicId: topic.id, puntoId: punto.id })} aria-label="Eliminar punto"><X className="h-4 w-4 text-[#98a2b3]" /></button>}
-      </div>
-      <textarea disabled={readOnly} className="mt-2 w-full resize-none rounded-xl bg-[#f8f9fc] p-2 text-sm outline-none" rows={2} placeholder="Contexto y acuerdos (lo que no es tarea)" value={punto.context} onChange={(event) => onAction({ type: "patchPunto", topicId: topic.id, puntoId: punto.id, patch: { context: event.target.value } })} />
-      {punto.leadImportKey && <p className="mt-2 text-xs text-[var(--blue)]">Vinculado a una oportunidad del CRM</p>}
-      <div className="mt-2 space-y-2">
-        {visible.map((item) => (
-          <PendienteRow key={item.id} item={item} topic={topic} punto={punto} doc={doc} asOf={asOf} readOnly={readOnly} onAction={onAction} onLink={() => onLink({ topicId: topic.id, puntoId: punto.id, pendienteId: item.id })} />
-        ))}
-      </div>
-      {hidden > 0 && <p className="mt-2 text-xs text-[#98a2b3]">{hidden} pendiente{hidden === 1 ? "" : "s"} cerrado{hidden === 1 ? "" : "s"} oculto{hidden === 1 ? "" : "s"}</p>}
-      <div className="mt-2 flex flex-wrap gap-3 text-sm">
-        {!readOnly && <button className="text-[var(--blue)]" onClick={() => onAction({ type: "addPendiente", topicId: topic.id, puntoId: punto.id, id: uid() })}>+ Pendiente</button>}
-        {!readOnly && <button className="text-[var(--blue)]" onClick={() => setLinkOpen(true)}>+ Anexar link</button>}
-        {!readOnly && <button className="text-[#667085]" onClick={() => onLink({ topicId: topic.id, puntoId: punto.id })}>Vincular oportunidad</button>}
-      </div>
-      {punto.links.length > 0 && (
-        <div className="mt-2 flex flex-wrap gap-2">
-          {punto.links.map((link) => (
-            <span key={link.id} className="inline-flex items-center gap-1 rounded-full bg-[#f4f6fb] px-2 py-1 text-xs">
-              <Calendar className="h-3.5 w-3.5" /> {link.url ? <a href={link.url} className="underline">{link.label}</a> : link.label}
-              {!readOnly && <button onClick={() => onAction({ type: "deleteLink", topicId: topic.id, puntoId: punto.id, linkId: link.id })} aria-label="Quitar enlace"><X className="h-3 w-3" /></button>}
-            </span>
-          ))}
-        </div>
-      )}
-      {punto.acta && (
-        <div className="mt-2">
-          <button className="text-xs tracking-wide text-[#98a2b3]" onClick={() => setActaOpen((value) => !value)}>{actaOpen ? "▾" : "▸"} TEXTO ORIGINAL DEL ACTA</button>
-          {actaOpen && <pre className="mt-2 whitespace-pre-wrap rounded-xl bg-[#f8f9fc] p-3 text-xs text-[#475467]">{punto.acta}</pre>}
-        </div>
-      )}
-      <Dialog open={linkOpen} onOpenChange={setLinkOpen}>
-        <DialogContent className="p-6">
-          <DialogTitle>Anexar link</DialogTitle>
-          <Input className="mt-3" placeholder="Nombre" value={label} onChange={(event) => setLabel(event.target.value)} />
-          <Input className="mt-2" placeholder="https://" value={url} onChange={(event) => setUrl(event.target.value)} />
-          <Button className="mt-3" onClick={() => { onAction({ type: "addLink", topicId: topic.id, puntoId: punto.id, id: uid(), label, url }); setLinkOpen(false); setLabel(""); setUrl(""); }}>Agregar</Button>
-        </DialogContent>
-      </Dialog>
-    </div>
-  );
-}
-
-function PendienteRow({ item, topic, punto, doc, asOf, readOnly, onAction, onLink }: {
-  item: Pendiente; topic: Topic; punto: Punto; doc: CommitteeDoc; asOf: string; readOnly: boolean;
-  onAction: (action: CommitteeAction) => void; onLink: () => void;
-}) {
-  const carry = carryCount(doc, item);
-  const tone = carryTone(carry);
-  const overdue = isOpen(item) && !!item.dueOn && item.dueOn < asOf;
-  const label = carry <= 0 ? `Nuevo · ${shortDate(item.bornOn)}` : carry === 1 ? `1 comité · ${shortDate(item.bornOn)}` : `${carry} comités · ${shortDate(item.bornOn)}`;
-  return (
-    <div className={cn("rounded-xl border p-2", tone === "red" ? "border-rose-200 bg-rose-50" : tone === "amber" ? "border-amber-200 bg-amber-50/60" : "border-[#eef0f5]", item.status === "cerrado" && "opacity-70")}>
-      <div className="flex flex-wrap items-center gap-2">
-        <select disabled={readOnly} value={item.status} onChange={(event) => onAction({ type: "patchPendiente", topicId: topic.id, puntoId: punto.id, pendienteId: item.id, patch: { status: event.target.value as Pendiente["status"] } })} className={cn("rounded-full border bg-white px-2 py-1 text-xs", item.status === "en_curso" ? "border-lime-500 text-lime-800" : item.status === "cerrado" ? "border-emerald-500 text-emerald-800" : "border-amber-400 text-amber-800")}>
-          {STATUSES.map((status) => <option key={status.id} value={status.id}>{status.label}</option>)}
-        </select>
-        <input disabled={readOnly} className={cn("min-w-[180px] flex-1 bg-transparent text-sm outline-none", item.status === "cerrado" && "line-through")} placeholder="¿Qué hay que hacer?" value={item.title} onChange={(event) => onAction({ type: "patchPendiente", topicId: topic.id, puntoId: punto.id, pendienteId: item.id, patch: { title: event.target.value } })} />
-        {!readOnly && <button onClick={() => onAction({ type: "deletePendiente", topicId: topic.id, puntoId: punto.id, pendienteId: item.id })} aria-label="Eliminar pendiente"><X className="h-4 w-4 text-[#98a2b3]" /></button>}
-      </div>
-      <div className="mt-2 flex flex-wrap items-center gap-2">
-        <OwnerPicker people={doc.people.map((person) => person.name)} owners={item.owners} disabled={readOnly} onChange={(owners) => onAction({ type: "setOwners", topicId: topic.id, puntoId: punto.id, pendienteId: item.id, owners })} />
-        <input disabled={readOnly} type="date" value={item.dueOn ?? ""} onChange={(event) => onAction({ type: "patchPendiente", topicId: topic.id, puntoId: punto.id, pendienteId: item.id, patch: { dueOn: event.target.value || null } })} className={cn("rounded-lg border bg-white px-2 py-1 text-xs", overdue && "border-rose-500 text-rose-700")} />
-        {overdue && <span className="text-[11px] font-semibold text-rose-600">VENCIDO</span>}
-        <select disabled={readOnly} value={item.bornCommitteeNumber} onChange={(event) => onAction({ type: "patchPendiente", topicId: topic.id, puntoId: punto.id, pendienteId: item.id, patch: { bornCommitteeNumber: Number(event.target.value) } })} className={cn("rounded-full border px-2 py-1 text-xs", tone === "red" ? "border-rose-500 bg-rose-600 text-white" : tone === "amber" ? "border-amber-400 text-amber-800" : "border-[#d5d9e4] bg-white")}>
-          {doc.calendar.filter((entry) => entry.number <= doc.committee.number).map((entry) => {
-            const age = doc.committee.number - entry.number;
-            const text = age <= 0 ? `Nuevo · ${shortDate(entry.heldOn)}` : `${age} ${age === 1 ? "comité" : "comités"} · ${shortDate(entry.heldOn)}`;
-            return <option key={entry.number} value={entry.number}>{text}</option>;
-          })}
-        </select>
-        <span className="sr-only">{label}</span>
-        <button className="text-[#667085]" onClick={onLink} aria-label="Vincular oportunidad"><Link2 className="h-4 w-4" /></button>
-        {item.leadImportKey && <span className="text-[11px] text-[var(--blue)]">CRM</span>}
-      </div>
-    </div>
-  );
-}
-
-function OwnerPicker({ people, owners, disabled, onChange }: { people: string[]; owners: string[]; disabled: boolean; onChange: (owners: string[]) => void }) {
-  const [adding, setAdding] = useState("");
-  return (
-    <details className="relative">
-      <summary className="flex cursor-pointer list-none items-center gap-1 text-xs">
-        {owners.length === 0 && <span className="rounded-full border border-dashed px-2 py-1 text-[#98a2b3]">Responsable</span>}
-        {owners.map((owner) => <span key={owner} className="rounded-full bg-[var(--navy)] px-2 py-1 text-white">{owner}</span>)}
-        <ChevronDown className="h-3.5 w-3.5 text-[#98a2b3]" />
-      </summary>
-      {!disabled && (
-        <div className="absolute z-10 mt-1 w-52 rounded-xl border bg-white p-2 shadow-lg">
-          {people.map((name) => (
-            <label key={name} className="flex items-center gap-2 py-1 text-sm">
-              <input type="checkbox" checked={owners.includes(name)} onChange={(event) => onChange(event.target.checked ? [...owners, name] : owners.filter((owner) => owner !== name))} />
-              {name}
-            </label>
-          ))}
-          <div className="mt-2 flex gap-1">
-            <input className="w-full rounded-lg border px-2 py-1 text-xs" placeholder="Agregar" value={adding} onChange={(event) => setAdding(event.target.value)} />
-            <button className="text-xs text-[var(--blue)]" onClick={() => { if (adding.trim()) onChange([...owners, adding.trim()]); setAdding(""); }}>Ok</button>
-          </div>
-        </div>
-      )}
-    </details>
-  );
-}
-
-function EmailDialog({ open, onOpenChange, doc, asOf }: { open: boolean; onOpenChange: (open: boolean) => void; doc: CommitteeDoc; asOf: string }) {
-  const email = useMemo(() => buildCommitteeEmail(doc, asOf), [doc, asOf]);
-  const [copied, setCopied] = useState("");
-  async function copy(kind: "subject" | "body") {
-    if (kind === "subject") await navigator.clipboard.writeText(email.subject);
-    else {
-      await navigator.clipboard.write([
-        new ClipboardItem({
-          "text/html": new Blob([email.html], { type: "text/html" }),
-          "text/plain": new Blob([email.text], { type: "text/plain" }),
-        }),
-      ]);
-    }
-    setCopied(kind);
-  }
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="p-0">
-        <div className="border-b px-6 py-4">
-          <p className="text-[11px] tracking-[0.16em] text-[#98a2b3]">CORREO DEL COMITÉ</p>
-          <DialogTitle>Resumen listo para enviar</DialogTitle>
-          <p className="text-sm text-[#667085]">Copia y pega en Outlook o Gmail: la tabla se mantiene. Este módulo no envía el correo.</p>
-        </div>
-        <div className="space-y-3 px-6 py-4">
-          <div className="flex items-center gap-2">
-            <div className="min-w-0 flex-1">
-              <p className="text-[11px] text-[#98a2b3]">ASUNTO</p>
-              <p className="truncate rounded-xl border px-3 py-2 text-sm">{email.subject}</p>
-            </div>
-            <Button variant="outline" onClick={() => copy("subject")}>{copied === "subject" ? "Copiado" : "Copiar"}</Button>
-          </div>
-          <div className="max-h-[46vh] overflow-auto rounded-xl border p-4" dangerouslySetInnerHTML={{ __html: email.html }} />
-        </div>
-        <div className="flex justify-end gap-2 border-t px-6 py-4">
-          <Button variant="outline" onClick={() => onOpenChange(false)}>Cerrar</Button>
-          <Button onClick={() => copy("body")}>{copied === "body" ? "Copiado" : "Copiar correo con tabla"}</Button>
-        </div>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-function LeadLinker({ open, onOpenChange, onPick }: { open: boolean; onOpenChange: (open: boolean) => void; onPick: (key: string | null) => void }) {
-  const [q, setQ] = useState("");
-  const [rows, setRows] = useState<{ import_key: string; name: string; customer: string; stage: string }[]>([]);
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="p-6">
-        <DialogTitle>Vincular oportunidad</DialogTitle>
-        <Input className="mt-3" placeholder="Cliente u oportunidad" value={q} onChange={async (event) => {
-          setQ(event.target.value);
-          const response = await fetch(`/api/leads?q=${encodeURIComponent(event.target.value)}`);
-          const payload = (await response.json()) as { leads: typeof rows };
-          setRows(payload.leads);
-        }} />
-        <div className="mt-3 max-h-64 space-y-1 overflow-auto">
-          {rows.map((row) => (
-            <button key={row.import_key} className="block w-full rounded-xl px-2 py-2 text-left text-sm hover:bg-[#f4f6fb]" onClick={() => onPick(row.import_key)}>
-              <span className="font-medium">{row.customer || row.name}</span>
-              <span className="block text-xs text-[#667085]">{row.name} · {row.stage}</span>
-            </button>
-          ))}
-        </div>
-        <button className="mt-3 text-sm text-[#667085]" onClick={() => onPick(null)}>Quitar vínculo</button>
-      </DialogContent>
-    </Dialog>
+    </Tooltip>
   );
 }

@@ -1,106 +1,137 @@
 "use client";
 
-import { useState } from "react";
-import { KPI_METRICS, metricActual, type SalesKpi } from "@/lib/kpi/compute";
-import { cop, displaySeller } from "@/lib/utils";
+import { useRef, useState } from "react";
+import { useRouter } from "next/navigation";
+import { Info, Target } from "lucide-react";
+import type { SalesKpi } from "@/lib/kpi/compute";
+import { cop, displaySeller, longDate } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
+import { Chip } from "@/components/ui/chip";
+import { PageHeader } from "@/components/ui/page-header";
+import { Stat, StatGrid } from "@/components/ui/stat";
+import { useToast } from "@/components/ui/toast";
+import { Tooltip } from "@/components/ui/tooltip";
+import { SellerDetail } from "@/components/kpi/SellerDetail";
+import { TargetDialog, type TargetDraft } from "@/components/kpi/TargetDialog";
+import { TargetsCard } from "@/components/kpi/TargetsCard";
+import { TeamTable } from "@/components/kpi/TeamTable";
+import { TEAM, formatMetricValue, formatRate, kpiFor, metricById, monthLabel, periodOf, type KpiTarget, type MetricId } from "@/components/kpi/targets";
 
-type Target = { id: number; salesperson: string; metric: string; period: string; target_value: number };
-
-export function KpiBoard({ team, people, targets: initialTargets, asOf }: { team: SalesKpi; people: SalesKpi[]; targets: Target[]; asOf: string }) {
+/** Pantalla de KPIs: resumen del equipo, tabla comparativa, detalle del vendedor elegido y sus metas del mes. */
+export function KpiBoard({ team, people, targets: initialTargets, asOf }: { team: SalesKpi; people: SalesKpi[]; targets: KpiTarget[]; asOf: string }) {
+  const router = useRouter();
+  const { toast } = useToast();
+  const [selected, setSelected] = useState<string>(TEAM);
+  const [month, setMonth] = useState(periodOf(asOf));
   const [targets, setTargets] = useState(initialTargets);
-  const [selected, setSelected] = useState(people[0]?.salesperson ?? "");
-  const person = people.find((item) => item.salesperson === selected) ?? people[0];
-  const [form, setForm] = useState({ salesperson: "", metric: "expected_revenue", period: asOf.slice(0, 7), targetValue: "" });
+  const [dialog, setDialog] = useState<TargetDraft | null>(null);
+  const detailRef = useRef<HTMLDivElement>(null);
+  const targetsRef = useRef<HTMLDivElement>(null);
 
-  async function addTarget() {
-    await fetch("/api/kpis", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...form, targetValue: Number(form.targetValue) }),
+  const kpi = kpiFor(selected, team, people);
+  const isTeam = selected === TEAM || kpi === team;
+  const displayName = isTeam ? "Equipo" : displaySeller(kpi.salesperson);
+
+  function select(salesperson: string, scroll = false) {
+    setSelected(salesperson);
+    if (scroll) window.requestAnimationFrame(() => detailRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
+  }
+
+  function openDialog(metric: MetricId = "expected_revenue", existing?: KpiTarget) {
+    setDialog({
+      salesperson: existing?.salesperson ?? selected,
+      metric,
+      period: existing?.period ?? month,
+      targetValue: existing ? String(existing.target_value) : "",
     });
-    setTargets((rows) => [...rows, { id: Date.now(), salesperson: form.salesperson, metric: form.metric, period: form.period, target_value: Number(form.targetValue) }]);
+  }
+
+  function handleSaved(target: KpiTarget) {
+    setTargets((current) => [...current.filter((item) => !(item.salesperson === target.salesperson && item.metric === target.metric && item.period === target.period)), target]);
+    setDialog(null);
+    setSelected(target.salesperson);
+    setMonth(target.period);
+    const metric = metricById(target.metric);
+    toast({
+      title: "Meta guardada",
+      description: `${metric?.label ?? target.metric} · ${target.salesperson === TEAM ? "Equipo" : displaySeller(target.salesperson)} · ${monthLabel(target.period)} · ${metric ? formatMetricValue(metric, target.target_value) : target.target_value}`,
+    });
+    window.requestAnimationFrame(() => targetsRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" }));
+    router.refresh();
+  }
+
+  function handleDeleted(id: number) {
+    setTargets((current) => current.filter((item) => item.id !== id));
+    router.refresh();
   }
 
   return (
-    <main className="mx-auto max-w-6xl space-y-5 px-4 py-6">
-      <div>
-        <p className="text-xs tracking-[0.16em] text-[#98a2b3]">COMERCIAL · {asOf}</p>
-        <h1 className="font-serif text-4xl">KPIs por vendedor</h1>
-        <p className="max-w-2xl text-sm text-[#667085]">Abiertas, ganadas y perdidas salen de la etapa del pipeline. La antigüedad es desde la creación: el export no trae la fecha de entrada a la etapa. Las metas están vacías hasta que las definan.</p>
-      </div>
-      <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
-        <Stat label="Abiertas" value={String(team.open)} />
-        <Stat label="Ganadas" value={String(team.won)} />
-        <Stat label="Perdidas" value={String(team.lost)} />
-        <Stat label="Tasa de cierre" value={team.winRate == null ? "—" : `${Math.round(team.winRate * 100)}%`} />
-        <Stat label="Ingreso esperado" value={cop(team.expectedRevenue)} />
-      </section>
-      <div className="flex gap-2 overflow-x-auto">
-        {people.map((item) => (
-          <button key={item.salesperson} onClick={() => setSelected(item.salesperson)} className={`shrink-0 rounded-full px-3 py-1.5 text-sm ${item.salesperson === person?.salesperson ? "bg-[var(--navy)] text-white" : "bg-white"}`}>
-            {displaySeller(item.salesperson)}
-          </button>
-        ))}
-      </div>
-      {person && (
-        <section className="grid gap-4 lg:grid-cols-[1.1fr_0.9fr]">
-          <div className="rounded-3xl bg-white p-5 shadow-sm">
-            <h2 className="font-semibold">{person.salesperson}</h2>
-            <div className="mt-3 grid grid-cols-2 gap-3 text-sm sm:grid-cols-3">
-              <Mini label="Abiertas" value={person.open} />
-              <Mini label="Ganadas" value={person.won} />
-              <Mini label="Perdidas" value={person.lost} />
-              <Mini label="Recurrentes" value={person.recurrente} />
-              <Mini label="Inactivas" value={person.inactive} />
-              <Mini label="Actividades vencidas" value={person.overdueActivities} />
-            </div>
-            <p className="mt-4 text-sm">Pronóstico ponderado {cop(person.weightedRevenue)}</p>
-            <div className="mt-4 space-y-2">
-              {person.stageAging.map((stage) => (
-                <div key={stage.stage}>
-                  <div className="flex justify-between text-xs text-[#667085]"><span>{stage.short}</span><span>{stage.count} · {stage.avgDays} días</span></div>
-                  <div className="mt-1 h-2 rounded-full bg-[#eef1f6]"><div className="h-full rounded-full bg-[var(--blue)]" style={{ width: `${Math.min(100, stage.avgDays / 4)}%` }} /></div>
-                </div>
-              ))}
-            </div>
-          </div>
-          <div className="rounded-3xl bg-white p-5 shadow-sm">
-            <h2 className="font-semibold">Metas</h2>
-            <p className="text-sm text-[#667085]">Todavía no hay metas cargadas para este corte. Puedes dejar una y se compara con el número real.</p>
-            <div className="mt-3 space-y-2 text-sm">
-              {KPI_METRICS.map((metric) => {
-                const actual = metricActual(person, metric.id);
-                const target = targets.find((item) => item.metric === metric.id && (item.salesperson === person.salesperson || item.salesperson === ""));
-                return (
-                  <div key={metric.id} className="flex items-center justify-between gap-3 border-b border-[#f2f4f7] py-2">
-                    <span>{metric.label}</span>
-                    <span>{actual ?? "—"} <span className="text-[#98a2b3]">/ {target ? target.target_value : "sin meta"}</span></span>
-                  </div>
-                );
-              })}
-            </div>
-            <div className="mt-4 grid gap-2">
-              <select className="rounded-xl border px-3 py-2 text-sm" value={form.salesperson} onChange={(event) => setForm({ ...form, salesperson: event.target.value })}>
-                <option value="">Equipo</option>
-                {people.map((item) => <option key={item.salesperson} value={item.salesperson}>{displaySeller(item.salesperson)}</option>)}
-              </select>
-              <select className="rounded-xl border px-3 py-2 text-sm" value={form.metric} onChange={(event) => setForm({ ...form, metric: event.target.value })}>
-                {KPI_METRICS.map((metric) => <option key={metric.id} value={metric.id}>{metric.label}</option>)}
-              </select>
-              <input className="rounded-xl border px-3 py-2 text-sm" value={form.period} onChange={(event) => setForm({ ...form, period: event.target.value })} />
-              <input className="rounded-xl border px-3 py-2 text-sm" placeholder="Valor" value={form.targetValue} onChange={(event) => setForm({ ...form, targetValue: event.target.value })} />
-              <button className="rounded-full bg-[var(--navy)] px-4 py-2 text-sm text-white" onClick={() => void addTarget()}>Guardar meta</button>
-            </div>
-          </div>
-        </section>
-      )}
-    </main>
-  );
-}
+    <div className="page">
+      <PageHeader
+        eyebrow={`Comercial · corte ${longDate(asOf)} de ${asOf.slice(0, 4)}`}
+        title="KPIs por vendedor"
+        description={
+          <span className="inline-flex flex-wrap items-center gap-1.5">
+            Resultados del pipeline por persona, comparados con sus metas del mes.
+            <Tooltip content="La antigüedad se cuenta desde la creación de la oportunidad porque el export de Odoo no trae la fecha de entrada a la etapa.">
+              <button type="button" className="inline-flex items-center gap-1 rounded-full text-ink-3 hover:text-ink" aria-label="Cómo se calcula la antigüedad">
+                <Info className="size-4" />
+              </button>
+            </Tooltip>
+          </span>
+        }
+        actions={
+          <Button onClick={() => openDialog()}>
+            <Target /> Definir meta
+          </Button>
+        }
+      />
 
-function Stat({ label, value }: { label: string; value: string }) {
-  return <div className="rounded-3xl bg-white p-4 shadow-sm"><p className="text-xs text-[#667085]">{label}</p><p className="mt-1 text-2xl font-semibold">{value}</p></div>;
-}
-function Mini({ label, value }: { label: string; value: number }) {
-  return <div className="rounded-2xl bg-[#f6f7fb] p-3"><p className="text-xs text-[#667085]">{label}</p><p className="text-xl font-semibold">{value}</p></div>;
+      <StatGrid className="xl:grid-cols-4">
+        <Stat label="Abiertas" value={team.open} hint="Etapas 1 a 6 del pipeline" />
+        <Stat label="Ganadas" value={team.won} hint="Etapa Cierre / Ganado" tone={team.won > 0 ? "ok" : "neutral"} />
+        <Stat label="Perdidas" value={team.lost} hint="Etapa Oportunidad perdida" />
+        <Stat label="Tasa de cierre" value={formatRate(team.winRate)} hint="Ganadas ÷ (ganadas + perdidas); las recurrentes no cuentan" />
+        <Stat label="Ingreso esperado" value={cop(team.expectedRevenue)} hint="Suma de las oportunidades abiertas" />
+        <Stat label="Pronóstico ponderado" value={cop(team.weightedRevenue)} hint="Ingreso esperado × probabilidad de cada una" />
+        <Stat
+          label="Actividades vencidas"
+          value={team.overdueActivities}
+          tone={team.overdueActivities > 0 ? "danger" : "ok"}
+          hint={team.overdueActivities > 0 ? "Por asignado: estado «Vencidas» o fecha límite pasada" : "Nada vencido hoy"}
+        />
+      </StatGrid>
+
+      <div className="mt-5 space-y-5">
+        <TeamTable team={team} people={people} selected={selected} onSelect={(salesperson) => select(salesperson, true)} />
+
+        <section ref={detailRef} className="scroll-mt-20 space-y-4" aria-label="Detalle del vendedor">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="mr-1 text-xs font-medium text-ink-3">Detalle de</span>
+            <Chip active={selected === TEAM} onClick={() => select(TEAM)}>Equipo</Chip>
+            {people.map((person) => (
+              <Chip key={person.salesperson} active={selected === person.salesperson} onClick={() => select(person.salesperson)} alert={person.overdueActivities > 0}>
+                {displaySeller(person.salesperson)}
+              </Chip>
+            ))}
+            {people.some((person) => person.overdueActivities > 0) && <span className="text-[11px] text-ink-3">en rojo: con actividades vencidas</span>}
+          </div>
+          <SellerDetail kpi={kpi} displayName={displayName} isTeam={isTeam} />
+          <TargetsCard
+            cardRef={targetsRef}
+            kpi={kpi}
+            selected={isTeam ? TEAM : kpi.salesperson}
+            displayName={displayName}
+            month={month}
+            onMonthChange={setMonth}
+            targets={targets}
+            onDefine={openDialog}
+            onDeleted={handleDeleted}
+          />
+        </section>
+      </div>
+
+      {dialog && <TargetDialog initial={dialog} team={team} people={people} onClose={() => setDialog(null)} onSaved={handleSaved} />}
+    </div>
+  );
 }

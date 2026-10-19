@@ -4,6 +4,7 @@ import {
   addMaintenance,
   catalogValues,
   createEquipment,
+  getEquipment,
   hourlyRate,
   listEquipment,
   setHourlyRate,
@@ -11,15 +12,20 @@ import {
   updateEquipment,
   type EquipmentInput,
 } from "@/lib/db";
+import { nextMaintenanceBySerial, nextMaintenanceFor } from "@/lib/equipment/queries";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+const CATALOG_KINDS = new Set(["category", "client", "supplier", "city"]);
+
 export function GET(request: Request) {
   const view = new URL(request.url).searchParams.get("view");
   if (view === "sync") return NextResponse.json(sheetPlans());
+  const equipment = listEquipment();
   return NextResponse.json({
-    equipment: listEquipment(),
+    equipment,
+    nextMaintenance: nextMaintenanceBySerial(equipment),
     hourlyRate: hourlyRate(),
     categories: catalogValues("category"),
     clients: catalogValues("client"),
@@ -29,34 +35,42 @@ export function GET(request: Request) {
   });
 }
 
+/** Crea un equipo, o agrega un valor a una lista fija cuando llega `catalogKind` + `catalogValue`. */
 export async function POST(request: Request) {
   try {
     const body = (await request.json()) as EquipmentInput & { catalogKind?: string; catalogValue?: string };
     if (body.catalogKind && body.catalogValue) {
-      addCatalogValue(body.catalogKind, body.catalogValue);
-      return NextResponse.json({ ok: true });
+      if (!CATALOG_KINDS.has(body.catalogKind)) return NextResponse.json({ error: "Esa lista no existe." }, { status: 400 });
+      const value = body.catalogValue.trim();
+      if (!value) return NextResponse.json({ error: "Escribe un valor." }, { status: 400 });
+      addCatalogValue(body.catalogKind, value);
+      return NextResponse.json({ ok: true, kind: body.catalogKind, values: catalogValues(body.catalogKind) });
     }
     const row = createEquipment(body);
-    return NextResponse.json({ equipment: row });
+    return NextResponse.json({ equipment: row, nextMaintenance: nextMaintenanceFor(row) });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "No se pudo crear." }, { status: 400 });
   }
 }
 
+/** Edita un equipo, o cambia la tarifa hora cuando llega `hourlyRate` sin serial. */
 export async function PATCH(request: Request) {
   try {
     const body = (await request.json()) as EquipmentInput & { hourlyRate?: number };
     if (body.hourlyRate != null && !body.serial) {
-      setHourlyRate(Number(body.hourlyRate));
+      const value = Number(body.hourlyRate);
+      if (!Number.isFinite(value) || value < 0) return NextResponse.json({ error: "La tarifa debe ser un número mayor o igual a cero." }, { status: 400 });
+      setHourlyRate(value);
       return NextResponse.json({ ok: true, hourlyRate: hourlyRate() });
     }
     const row = updateEquipment(body.serial, body);
-    return NextResponse.json({ equipment: row });
+    return NextResponse.json({ equipment: row, nextMaintenance: nextMaintenanceFor(row) });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "No se pudo guardar." }, { status: 400 });
   }
 }
 
+/** Registra un mantenimiento en la hoja de vida. */
 export async function PUT(request: Request) {
   try {
     const body = (await request.json()) as {
@@ -69,8 +83,11 @@ export async function PUT(request: Request) {
       notes: string;
       conditionAfter: string;
     };
-    addMaintenance(body.serial, body);
-    return NextResponse.json({ ok: true });
+    if (!body.performedOn) return NextResponse.json({ error: "La fecha es obligatoria." }, { status: 400 });
+    if (!Number.isFinite(body.hours) || body.hours < 0) return NextResponse.json({ error: "Las horas deben ser un número mayor o igual a cero." }, { status: 400 });
+    addMaintenance(body.serial, { ...body, partsCost: Number.isFinite(body.partsCost) ? body.partsCost : 0 });
+    const row = getEquipment(body.serial);
+    return NextResponse.json({ ok: true, nextMaintenance: row ? nextMaintenanceFor(row) : null });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "No se pudo registrar." }, { status: 400 });
   }
