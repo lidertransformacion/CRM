@@ -50,32 +50,15 @@ Every page and API route requires a signed `crm_session` cookie. Public routes a
 
 ## Cloudflare deploy
 
-Do not put secret values in the repo or in `wrangler.jsonc` `vars`.
+Production deploys from `main` through Cloudflare Workers Builds. The dashboard Git integration creates its own API token. This repository has no GitHub Actions workflow and no Cloudflare token. The exact dashboard fields are in [docs/deploy-cloudflare.md](docs/deploy-cloudflare.md).
 
-1. Create the database and paste the printed `database_id` into `wrangler.jsonc` (`d1_databases[0].database_id`). The committed id is a placeholder.
+The Worker name is `crm-libertario`. The D1 binding `DB` is the existing database `crm-pay-line` (`ded1c012-2e0a-4b1b-9339-24047b32a99e`). `MAIL_MODE` is `log` and `SHEETS_SYNC_ENABLED` is `false`. Secrets stay out of `wrangler.jsonc`.
 
-```bash
-npx wrangler d1 create crm-pay-line
-```
-
-2. Apply the schema. The app also creates tables on the first request. The migration is the same SQL.
-
-```bash
-npx wrangler d1 migrations apply crm-pay-line --remote
-```
-
-3. Set secrets. Wrangler prompts for the value; nothing is written to the repo.
+Set a secret from a trusted machine. Wrangler prompts for the value.
 
 ```bash
 npx wrangler secret put SESSION_SECRET
 npx wrangler secret put BOOTSTRAP_ADMIN_PASSWORD
-```
-
-4. Build, then deploy when you are ready. This repository does not deploy itself.
-
-```bash
-npm run build
-npx wrangler deploy
 ```
 
 The first request after deploy advances a single D1 batch and creates the bootstrap admin. Later requests keep advancing one batch until the snapshot is complete; the Worker does not remember a finished setup promise. Finish it as an admin by repeating `POST /api/admin/seed` until the JSON `complete` field is true, or run `npm run seed` against a local database. Each call is idempotent. A partial equipment load inserts the missing serials and leaves existing leads in place. The bundled snapshot has 699 leads, 72 activities, 32 teams, and 224 equipment. A bad `BOOTSTRAP_ADMIN_PASSWORD` returns only "No se pudo preparar el acceso inicial."

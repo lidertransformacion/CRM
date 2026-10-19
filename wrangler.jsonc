@@ -1,6 +1,6 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "crm-pay-line",
+  "name": "crm-libertario",
   "main": "vinext/server/fetch-handler",
   "compatibility_date": "2026-10-19",
   "compatibility_flags": ["nodejs_compat"],
@@ -15,7 +15,7 @@
     {
       "binding": "DB",
       "database_name": "crm-pay-line",
-      "database_id": "00000000-0000-0000-0000-000000000000",
+      "database_id": "ded1c012-2e0a-4b1b-9339-24047b32a99e",
       "migrations_dir": "migrations"
     }
   ],
