@@ -1,7 +1,9 @@
 import type { Metadata, Viewport } from "next";
 import type { ReactNode } from "react";
 import { Poppins, Libre_Baskerville } from "next/font/google";
+import { cookies } from "next/headers";
 import { AppShell } from "@/components/shell/AppShell";
+import { SESSION_COOKIE, verifySession } from "@/lib/auth/session";
 import { ToastProvider } from "@/components/ui/toast";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import "./globals.css";
@@ -28,13 +30,16 @@ export const metadata: Metadata = {
 
 export const viewport: Viewport = { themeColor: "#182b55", width: "device-width", initialScale: 1, viewportFit: "cover" };
 
-export default function RootLayout({ children }: Readonly<{ children: ReactNode }>) {
+export default async function RootLayout({ children }: Readonly<{ children: ReactNode }>) {
+  // La tarjeta de usuario del menú necesita saber quién está conectado (solo lee la cookie firmada).
+  const session = await verifySession((await cookies()).get(SESSION_COOKIE)?.value);
+  const user = session ? { email: session.email, role: session.role } : null;
   return (
     <html lang="es" className={`${poppins.variable} ${baskerville.variable}`}>
       <body className="antialiased">
         <TooltipProvider>
           <ToastProvider>
-            <AppShell>{children}</AppShell>
+            <AppShell user={user}>{children}</AppShell>
           </ToastProvider>
         </TooltipProvider>
       </body>

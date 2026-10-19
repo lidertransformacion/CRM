@@ -37,7 +37,7 @@ export function BottomNav({ onMore, moreOpen }: { onMore: () => void; moreOpen: 
         })}
         <li>
           <button type="button" onClick={onMore} aria-expanded={moreOpen} className={cn("flex h-14 w-full flex-col items-center justify-center gap-1 text-[11px] font-medium", otherActive || moreOpen ? "text-navy" : "text-ink-3")}>
-            <span className={cn("flex h-7 w-10 items-center justify-center rounded-full", (otherActive || moreOpen) && "bg-amarillo")}>
+            <span className={cn("flex h-7 w-10 items-center justify-center rounded-full", (otherActive || moreOpen) && "bg-navy text-crema")}>
               <Ellipsis className="size-5" />
             </span>
             <span>Más</span>
@@ -51,7 +51,7 @@ export function BottomNav({ onMore, moreOpen }: { onMore: () => void; moreOpen: 
 function TabIcon({ icon: Icon, active }: { icon: LucideIcon; active: boolean }) {
   const { pending } = useLinkStatus();
   return (
-    <span className={cn("flex h-7 w-10 items-center justify-center rounded-full transition-colors", active && "bg-amarillo")}>
+    <span className={cn("flex h-7 w-10 items-center justify-center rounded-full transition-colors", active && "bg-navy text-crema")}>
       {pending ? <LoaderCircle className="size-5 animate-spin" aria-label="Cargando" /> : <Icon className="size-5" />}
     </span>
   );

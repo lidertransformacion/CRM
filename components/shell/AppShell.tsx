@@ -3,7 +3,7 @@
 import * as React from "react";
 import Link, { useLinkStatus } from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { LoaderCircle, LogOut, Search, Settings, UserRound } from "lucide-react";
+import { LoaderCircle, LogOut, Search, Settings } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Kbd } from "@/components/ui/kbd";
 import { Sheet, SheetContent, SheetBody } from "@/components/ui/sheet";
@@ -14,7 +14,9 @@ import { NavigationProgress } from "@/components/shell/NavigationProgress";
 import { BottomNav } from "@/components/shell/BottomNav";
 import { NAV, currentSection, isActive } from "@/components/shell/nav";
 
-export function AppShell({ children }: { children: React.ReactNode }) {
+export type ShellUser = { email: string; role: "admin" | "user" } | null;
+
+export function AppShell({ children, user = null }: { children: React.ReactNode; user?: ShellUser }) {
   const pathname = usePathname();
   const [mobileOpen, setMobileOpen] = React.useState(false);
   const [paletteOpen, setPaletteOpen] = React.useState(false);
@@ -54,12 +56,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       </React.Suspense>
       <div className="min-h-dvh">
         <aside
-          className="fixed inset-y-0 left-0 z-30 hidden w-[var(--sidebar-w)] flex-col bg-navy text-crema lg:flex"
+          className="fixed inset-y-0 left-0 z-30 hidden w-[var(--sidebar-w)] flex-col border-r border-line-2 bg-surface text-ink lg:flex"
           aria-label="Navegación principal"
         >
           <Brand />
-          <SidebarNav pathname={pathname} />
-          <SidebarFooter />
+          <SidebarNav pathname={pathname} user={user} />
+          <SidebarFooter user={user} />
         </aside>
 
         <div className="lg:pl-[var(--sidebar-w)]">
@@ -105,17 +107,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         <BottomNav onMore={() => setMobileOpen(true)} moreOpen={mobileOpen} />
 
         <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
-          <SheetContent
-            side="left"
-            size="sm"
-            title="CRM Libertario"
-            description="Equipo Comercial"
-            className="bg-navy text-crema [&_.eyebrow]:text-crema/60 [&_[data-slot=title]]:text-crema [&_[data-slot=description]]:text-crema/60 [&_button[aria-label=Cerrar]]:text-crema/70"
-          >
-            <SheetBody className="px-2 py-2">
-              <SidebarNav pathname={pathname} />
+          <SheetContent side="left" size="sm" title={<BrandLockup />} description="Menú" className="[&_[data-slot=description]]:sr-only">
+            <SheetBody className="px-0 py-2">
+              <SidebarNav pathname={pathname} user={user} />
             </SheetBody>
-            <SidebarFooter />
+            <SidebarFooter user={user} />
           </SheetContent>
         </Sheet>
 
@@ -125,90 +121,109 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   );
 }
 
+/** Sello de marca igual al de la app de mantenimiento: isotipo + LIBERTARIO + subtítulo. */
+function BrandLockup() {
+  return (
+    <span className="flex items-center gap-3">
+      <LogoMark className="size-10 shrink-0 text-ink" />
+      <span className="font-serif text-[15px] font-normal leading-none tracking-[0.2em] text-ink">
+        LIBERTARIO
+        <small className="mt-[3px] block font-sans text-[10px] font-normal uppercase tracking-[0.16em] text-ink-3">CRM Comercial</small>
+      </span>
+    </span>
+  );
+}
+
 function Brand() {
   return (
-    <Link href="/" className="flex items-center gap-3 px-5 pb-4 pt-5">
-      <LogoMark className="size-[34px] text-crema" />
-      <span className="leading-tight">
-        <span className="block text-[10px] font-medium uppercase tracking-[0.18em] text-crema/60">
-          Libertario Coffee
-        </span>
-        <span className="block font-serif text-lg text-crema">
-          CRM Comercial
-        </span>
+    <Link href="/" className="block border-b border-line-2 px-[18px] py-[18px]">
+      <BrandLockup />
+    </Link>
+  );
+}
+
+function SidebarNav({ pathname, user }: { pathname: string; user: ShellUser }) {
+  const settingsActive = pathname === "/ajustes";
+  return (
+    <nav className="flex-1 space-y-0.5 overflow-y-auto px-2.5 py-2.5">
+      {NAV.map((item) => (
+        <NavRow key={item.href} href={item.href} icon={item.icon} label={item.label} description={item.description} active={isActive(pathname, item)} />
+      ))}
+      {user?.role === "admin" && (
+        <div className="mt-3.5 border-t border-line-2 pt-2">
+          <NavRow href="/ajustes" icon={Settings} label="Ajustes" description="Usuarios y contraseñas" active={settingsActive} />
+        </div>
+      )}
+    </nav>
+  );
+}
+
+function NavRow({ href, icon, label, description, active }: { href: string; icon: React.ComponentType<{ className?: string }>; label: string; description: string; active: boolean }) {
+  return (
+    <Link
+      href={href}
+      aria-current={active ? "page" : undefined}
+      className={cn(
+        "flex items-center gap-3 rounded-lg px-3 py-2.5 text-[13.5px] transition-colors max-lg:py-3 max-lg:text-[15px]",
+        active ? "bg-navy font-medium text-crema" : "text-ink-2 hover:bg-accent-soft",
+      )}
+    >
+      <NavIcon icon={icon} />
+      <span className="flex min-w-0 flex-col leading-tight">
+        <span>{label}</span>
+        <small className={cn("truncate text-[11px] font-normal max-lg:text-xs", active ? "text-crema/70" : "text-ink-3")}>{description}</small>
       </span>
     </Link>
   );
 }
 
-function SidebarNav({ pathname }: { pathname: string }) {
-  return (
-    <nav className="flex-1 space-y-0.5 px-3 py-2">
-      {NAV.map((item) => {
-        const active = isActive(pathname, item);
-        const Icon = item.icon;
-        return (
-          <Link
-            key={item.href}
-            href={item.href}
-            aria-current={active ? "page" : undefined}
-            className={cn(
-              "group flex items-center gap-3 rounded-md px-3 py-2 transition-colors",
-              active
-                ? "bg-white/12 text-white"
-                : "text-crema/75 hover:bg-white/8 hover:text-white",
-            )}
-          >
-            <NavIcon icon={Icon} active={active} />
-            <span className="min-w-0 leading-tight">
-              <span className="block text-sm font-medium">{item.label}</span>
-              <span
-                className={cn(
-                  "block truncate text-[11px]",
-                  active ? "text-white/70" : "text-crema/50",
-                )}
-              >
-                {item.description}
-              </span>
-            </span>
-          </Link>
-        );
-      })}
-    </nav>
-  );
+const ROLE_LABEL = { admin: "Administrador", user: "Comercial" } as const;
+
+/** Nombre legible a partir del correo: "juan.perez@…" → "Juan Perez". */
+const KNOWN_NAMES: Record<string, string> = { lidertransformacion: "Transformación Digital" };
+
+function displayName(email: string) {
+  const local = email.split("@")[0].toLowerCase();
+  if (KNOWN_NAMES[local]) return KNOWN_NAMES[local];
+  return email
+    .split("@")[0]
+    .split(/[._-]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
 }
 
-function SidebarFooter() {
+/** Tarjeta de usuario al pie, como en mantenimiento: avatar, nombre, rol y salir. */
+function SidebarFooter({ user }: { user: ShellUser }) {
   const router = useRouter();
   async function logout() {
     await fetch("/api/auth/logout", { method: "POST" });
     router.replace("/login");
     router.refresh();
   }
+  const name = user ? displayName(user.email) : "Mi cuenta";
   return (
-    <div className="border-t border-white/10 px-5 py-4 text-[11px] leading-relaxed text-crema/55">
-      <div className="mb-2 grid grid-cols-3 gap-1 text-sm">
-        <Link href="/cuenta" className="flex h-11 flex-col items-center justify-center gap-0.5 rounded-md text-crema/80 hover:bg-white/8 hover:text-white lg:h-9 lg:flex-row lg:gap-1.5">
-          <UserRound className="size-4" /> Cuenta
+    <div className="safe-bottom border-t border-line-2 px-3.5 py-3">
+      <div className="flex items-center gap-3">
+        <Link href="/cuenta" className="flex min-w-0 flex-1 items-center gap-3 rounded-lg p-1 hover:bg-accent-soft" title="Mi cuenta">
+          <span className="grid size-9 shrink-0 place-items-center rounded-full bg-navy font-serif text-[15px] text-crema" aria-hidden>
+            {name.charAt(0)}
+          </span>
+          <span className="flex min-w-0 flex-col leading-tight">
+            <span className="truncate text-[13px] font-medium text-ink">{name}</span>
+            <span className="truncate text-xs text-ink-3">{user ? ROLE_LABEL[user.role] : "Equipo Comercial"}</span>
+          </span>
         </Link>
-        <Link href="/ajustes" className="flex h-11 flex-col items-center justify-center gap-0.5 rounded-md text-crema/80 hover:bg-white/8 hover:text-white lg:h-9 lg:flex-row lg:gap-1.5">
-          <Settings className="size-4" /> Ajustes
-        </Link>
-        <button type="button" onClick={logout} className="flex h-11 flex-col items-center justify-center gap-0.5 rounded-md text-crema/80 hover:bg-white/8 hover:text-white lg:h-9 lg:flex-row lg:gap-1.5">
-          <LogOut className="size-4" /> Salir
+        <button type="button" onClick={logout} aria-label="Cerrar sesión" title="Cerrar sesión" className="grid size-10 shrink-0 place-items-center rounded-lg text-ink-2 hover:bg-accent-soft hover:text-ink">
+          <LogOut className="size-[18px]" />
         </button>
       </div>
-      <p className="text-center lg:text-left">No envía correos ni escribe en Odoo.</p>
     </div>
   );
 }
 
 /** Icono del menú: muestra un spinner mientras Next carga la sección (useLinkStatus). */
-function NavIcon({ icon: Icon, active }: { icon: React.ComponentType<{ className?: string }>; active: boolean }) {
+function NavIcon({ icon: Icon }: { icon: React.ComponentType<{ className?: string }> }) {
   const { pending } = useLinkStatus();
-  return (
-    <span className={cn("flex size-8 shrink-0 items-center justify-center rounded-md", active ? "bg-amarillo text-navy" : "bg-white/8 text-crema/80 group-hover:bg-white/12")}>
-      {pending ? <LoaderCircle className="size-4 animate-spin" aria-label="Cargando" /> : <Icon className="size-4" />}
-    </span>
-  );
+  return pending ? <LoaderCircle className="size-[18px] shrink-0 animate-spin" aria-label="Cargando" /> : <Icon className="size-[18px] shrink-0" />;
 }
