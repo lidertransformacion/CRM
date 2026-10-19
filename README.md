@@ -115,7 +115,8 @@ These routes are in the app. They stay quiet until the matching secret is set. N
 | `POST /api/correos/outbox/process` | session | Drain the queue with `MAIL_MODE` |
 | `POST /api/correos/outbox/:id` | session | Requeue a failed message |
 | `POST /api/comodatos/sync` | session | `{ "direction": "pull" }` or `"push"`. Refuses to write while sync is off |
-| `POST /api/agent/ingest` | `Authorization: Bearer` | Snapshot from the browser agent. `mode` is `full` or `incremental` |
+| `POST /api/agent/ingest` | `Authorization: Bearer` | Snapshot batch. `mode` is `full` or `incremental`. `snapshotId` defers archive until commit. `dryRun` does not write |
+| `POST /api/agent/ingest/commit` | bearer | `{ "snapshotId" }` archives leads missing from that snapshot |
 | `GET /api/agent/outbound` | bearer | Pending creates and updates |
 | `POST /api/agent/outbound/:id` | bearer | `{ "odooId" }` or `{ "error" }` |
 

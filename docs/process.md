@@ -135,4 +135,40 @@ Templates are seeded in `email_templates` and rendered in the browser. Copy puts
 
 ## Odoo agent
 
-`POST /api/agent/ingest`, `GET /api/agent/outbound`, and `POST /api/agent/outbound/:id` accept a bearer `ODOO_AGENT_TOKEN` of at least 16 characters. The browser agent pushes snapshots and acks the outbound queue. `OdooSyncAdapter` still throws and does not open a connection to Odoo. A full ingest archives leads whose `odoo_id` is missing from the snapshot, except rows waiting on `pending_create`.
+`POST /api/agent/ingest`, `POST /api/agent/ingest/commit`, `GET /api/agent/outbound`, and `POST /api/agent/outbound/:id` accept a bearer `ODOO_AGENT_TOKEN` of at least 16 characters. The browser agent pushes snapshots and acks the outbound queue. `OdooSyncAdapter` still throws and does not open a connection to Odoo.
+
+A single `mode: "full"` body still archives every lead that is not in that body, except rows with `sync_state` `pending_create`. A large snapshot can be split: each batch sends the same `snapshotId` and does not archive. `POST /api/agent/ingest/commit` then archives every other lead, including seeded rows that never received an `odoo_id`. `pending_create` stays active.
+
+Seeded rows without `odoo_id` link when exactly one local row matches the normalized name, customer, and created day (`YYYY-MM-DD`; a time suffix is ignored). Name and customer ignore case, accents, and repeated spaces. The Excel `import_key` is kept and `odoo_id` is filled in. Two local matches do not link: the Odoo row is inserted and the message says it was not linked.
+
+`dryRun: true` reports `wouldInsert`, `wouldUpdate`, `wouldLink`, and `wouldArchive` and does not write leads, activities, the snapshot, or the sync log. On a dry run, `wouldArchive` treats that body as the whole snapshot. Live batches that include `snapshotId` leave archive at 0 until commit. Commit accepts `{ "snapshotId", "dryRun": true }` to report `wouldArchive` after the batches are stored, without archiving.
+
+Stage names map to the canvas stage list. Matching ignores case, accents, and spaces. An unknown stage is stored and shown with the label Odoo sent.
+
+```json
+{
+  "mode": "full",
+  "snapshotId": "odoo-2026-10-19",
+  "capturedAt": "2026-10-19T22:00:00.000Z",
+  "dryRun": false,
+  "leads": [
+    {
+      "id": 123,
+      "name": "Hotel Norte",
+      "customer": "Hotel Norte",
+      "stage": "NEGOCIACIÓN",
+      "createdAt": "2024-05-02",
+      "active": true,
+      "wonStatus": "Pendiente",
+      "expectedRevenue": 1000000,
+      "probability": 40,
+      "salesperson": "Ana",
+      "team": "Comercial"
+    }
+  ]
+}
+```
+
+```json
+{ "snapshotId": "odoo-2026-10-19" }
+```

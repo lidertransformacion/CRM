@@ -24,3 +24,23 @@ export const OPEN_STAGES = new Set(STAGES.filter((stage) => !stage.isWon && !sta
 export function stageOf(name: string): StageDef | undefined {
   return STAGES.find((stage) => stage.name === name);
 }
+
+function stageFold(value: string): string {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "");
+}
+
+const STAGE_BY_FOLD = new Map(STAGES.map((stage) => [stageFold(stage.name), stage.name]));
+
+/**
+ * Odoo stage label → canvas stage name. Case, accents, and spacing do not matter.
+ * An unknown label is returned trimmed, so the lead stays visible.
+ */
+export function canonicalStage(value: string | null | undefined): string {
+  const trimmed = (value ?? "").trim();
+  if (!trimmed) return "";
+  return STAGE_BY_FOLD.get(stageFold(trimmed)) ?? trimmed;
+}

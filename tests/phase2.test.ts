@@ -9,7 +9,8 @@ import { sendGmail } from "@/lib/mail/gmail";
 import { DEFAULT_FROM_ADDRESS, DEFAULT_FROM_NAME, fromIdentity, rfc822 } from "@/lib/mail/message";
 import { enqueueEmail, processOutbox } from "@/lib/mail/outbox";
 import { OdooSyncAdapter } from "@/lib/odoo/adapter";
-import { ingestSnapshot } from "@/lib/odoo/ingest";
+import { commitSnapshot, ingestSnapshot } from "@/lib/odoo/ingest";
+import { canonicalStage } from "@/lib/odoo/stages";
 import { acknowledgeOutbound, queueOutbound } from "@/lib/odoo/outbound";
 import { googleAccessToken, signServiceAccountJwt } from "@/lib/sheets/live";
 import { applySnapshot, pullFromSheet, rememberPush } from "@/lib/sheets/sync";
@@ -249,5 +250,127 @@ describe("odoo browser agent", () => {
     expect(acked.odooId).toBe("99");
     expect((await db.get<{ odoo_id: string; sync_state: string }>("SELECT odoo_id, sync_state FROM leads WHERE import_key = ?", ["local:nuevo"]))?.odoo_id).toBe("99");
     expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("maps Odoo stage labels onto the canvas names and keeps an unknown stage", () => {
+    expect(canonicalStage("lead")).toBe("LEAD");
+    expect(canonicalStage("  CONTACTO / visita / llamada en frío ")).toBe("CONTACTO/VISITA /LLAMADA EN FRIO");
+    expect(canonicalStage("impactado")).toBe("IMPACTADO");
+    expect(canonicalStage("PRESENTACION/DISCOVERY")).toBe("PRESENTACIÓN/DISCOVERY");
+    expect(canonicalStage("oferta comercial")).toBe("OFERTA COMERCIAL");
+    expect(canonicalStage("negociacion")).toBe("NEGOCIACIÓN");
+    expect(canonicalStage("cierre / ganado")).toBe("CIERRE/ GANADO");
+    expect(canonicalStage("cliente recurrente")).toBe("CLIENTE RECURRENTE");
+    expect(canonicalStage("oportunidad perdida")).toBe("OPORTUNIDAD PERDIDA");
+    expect(canonicalStage("  Etapa Fantasma  ")).toBe("Etapa Fantasma");
+    expect(canonicalStage("")).toBe("");
+  });
+
+  it("links one Excel row by name, customer, and created day, and a dry run writes nothing", async () => {
+    const { db } = await tempSql();
+    await db.run(
+      `INSERT INTO leads (import_key, name, stage, customer, created_at, active, won_status, salesperson, team)
+       VALUES ('excel:1', 'Café Centro', 'LEAD', 'Hotel Luna', '2024-05-02', 1, 'Pendiente', '', '')`,
+    );
+    const preview = await ingestSnapshot(db, {
+      mode: "full",
+      snapshotId: "preview",
+      dryRun: true,
+      leads: [{ id: 50, name: "Café  Centro", customer: "hotel luna", createdAt: "2024-05-02T10:00:00", stage: "negociacion", active: true }],
+    });
+    expect(preview).toMatchObject({ dryRun: true, wouldLink: 1, wouldInsert: 0, wouldUpdate: 0, wouldArchive: 0, inserted: 0, linked: 0, updated: 0, archived: 0 });
+    expect((await db.get<{ odoo_id: string | null }>("SELECT odoo_id FROM leads WHERE import_key = ?", ["excel:1"]))?.odoo_id ?? null).toBeNull();
+    expect(await db.get("SELECT snapshot_id FROM odoo_snapshot_seen WHERE snapshot_id = ?", ["preview"])).toBeUndefined();
+    expect(await db.get<{ n: number }>("SELECT COUNT(*) AS n FROM odoo_sync_log")).toMatchObject({ n: 0 });
+
+    const linked = await ingestSnapshot(db, {
+      mode: "incremental",
+      leads: [{ id: 50, name: "Café  Centro", partner: "Hotel   Luna", created_at: "2024-05-02", stage: "negociacion", active: true }],
+    });
+    expect(linked).toMatchObject({ linked: 1, inserted: 0, updated: 0 });
+    expect(await db.get<{ import_key: string; odoo_id: string; stage: string }>("SELECT import_key, odoo_id, stage FROM leads WHERE import_key = ?", ["excel:1"])).toMatchObject({
+      import_key: "excel:1",
+      odoo_id: "50",
+      stage: "NEGOCIACIÓN",
+    });
+    expect(await db.get<{ n: number }>("SELECT COUNT(*) AS n FROM leads")).toMatchObject({ n: 1 });
+  });
+
+  it("inserts the Odoo lead when two local rows share the same identity", async () => {
+    const { db } = await tempSql();
+    for (const key of ["excel:a", "excel:b"]) {
+      await db.run(`INSERT INTO leads (import_key, name, stage, customer, created_at, active) VALUES (?, 'Café Centro', 'LEAD', 'Hotel Luna', '2024-05-02', 1)`, [key]);
+    }
+    const result = await ingestSnapshot(db, {
+      mode: "incremental",
+      leads: [{ id: 50, name: "Cafe Centro", customer: "hotel luna", createdAt: "2024-05-02", stage: "LEAD" }],
+    });
+    expect(result.linked).toBe(0);
+    expect(result.inserted).toBe(1);
+    expect(result.errors[0]?.message).toMatch(/No se enlazó/);
+    expect(await db.get<{ n: number }>("SELECT COUNT(*) AS n FROM leads WHERE odoo_id IS NULL OR odoo_id = ''")).toMatchObject({ n: 2 });
+    expect((await db.get<{ import_key: string }>("SELECT import_key FROM leads WHERE odoo_id = ?", ["50"]))?.import_key).toBe("odoo:50");
+  });
+
+  it("previews a full archive without writing it", async () => {
+    const { db } = await tempSql();
+    await ingestSnapshot(db, { mode: "full", leads: [{ id: 1, name: "A", stage: "LEAD", active: true }] });
+    const preview = await ingestSnapshot(db, { mode: "full", dryRun: true, leads: [{ id: 2, name: "B", stage: "LEAD", active: true }] });
+    expect(preview).toMatchObject({ wouldInsert: 1, wouldArchive: 1, inserted: 0, archived: 0 });
+    expect((await db.get<{ active: number }>("SELECT active FROM leads WHERE odoo_id = ?", ["1"]))?.active).toBe(1);
+    expect(await db.get("SELECT import_key FROM leads WHERE odoo_id = ?", ["2"])).toBeUndefined();
+  });
+
+  it("keeps every batch until commit, then archives leads missing from the snapshot", async () => {
+    const { db } = await tempSql();
+    await db.run(
+      `INSERT INTO leads (import_key, name, stage, customer, created_at, active, won_status, odoo_id)
+       VALUES ('odoo:12', 'Hotel Viejo', 'LEAD', 'Viejo', '2024-01-01', 1, 'Ganado', '12')`,
+    );
+    await db.run(
+      `INSERT INTO leads (import_key, name, stage, customer, created_at, active, won_status)
+       VALUES ('excel:solo', 'Sin par', 'LEAD', 'Nadie', '2020-01-01', 1, 'Pendiente')`,
+    );
+    await db.run(
+      `INSERT INTO leads (import_key, name, stage, active, sync_state, won_status)
+       VALUES ('local:nuevo', 'Borrador', 'LEAD', 1, 'pending_create', 'Pendiente')`,
+    );
+    const first = await ingestSnapshot(db, {
+      mode: "full",
+      snapshotId: "odoo-2026-10-19",
+      capturedAt: "2026-10-19T22:00:00.000Z",
+      leads: [{ id: 10, name: "Hotel Norte", stage: "Etapa Fantasma", active: true, wonStatus: "Pendiente" }],
+    });
+    expect(first).toMatchObject({ inserted: 1, archived: 0, wouldArchive: 0 });
+    expect((await db.get<{ stage: string; active: number }>("SELECT stage, active FROM leads WHERE odoo_id = ?", ["10"]))?.stage).toBe("Etapa Fantasma");
+    expect((await db.get<{ active: number }>("SELECT active FROM leads WHERE odoo_id = ?", ["12"]))?.active).toBe(1);
+
+    const second = await ingestSnapshot(db, {
+      mode: "full",
+      snapshotId: "odoo-2026-10-19",
+      leads: [{ id: 11, name: "Hotel Sur", stage: "PRESENTACION/DISCOVERY", active: true, wonStatus: "Pendiente" }],
+    });
+    expect(second).toMatchObject({ inserted: 1, archived: 0 });
+    expect((await db.get<{ stage: string }>("SELECT stage FROM leads WHERE odoo_id = ?", ["11"]))?.stage).toBe("PRESENTACIÓN/DISCOVERY");
+
+    await expect(ingestSnapshot(db, { mode: "incremental", snapshotId: "odoo-2026-10-19", leads: [] })).rejects.toThrow(/snapshotId/);
+
+    const preview = await commitSnapshot(db, { snapshotId: "odoo-2026-10-19", dryRun: true });
+    expect(preview).toMatchObject({ seen: 2, archived: 0, wouldArchive: 2, dryRun: true });
+    expect((await db.get<{ active: number }>("SELECT active FROM leads WHERE odoo_id = ?", ["12"]))?.active).toBe(1);
+
+    const committed = await commitSnapshot(db, { snapshotId: "odoo-2026-10-19" });
+    expect(committed).toMatchObject({ seen: 2, archived: 2, wouldArchive: 2 });
+    expect(
+      await db.get<{ active: number; missing_from_odoo: number; won_status: string }>("SELECT active, missing_from_odoo, won_status FROM leads WHERE odoo_id = ?", ["12"]),
+    ).toMatchObject({ active: 0, missing_from_odoo: 1, won_status: "Ganado" });
+    expect(
+      await db.get<{ active: number; missing_from_odoo: number }>("SELECT active, missing_from_odoo FROM leads WHERE import_key = ?", ["excel:solo"]),
+    ).toMatchObject({ active: 0, missing_from_odoo: 1 });
+    expect(
+      await db.get<{ active: number; missing_from_odoo: number; sync_state: string }>("SELECT active, missing_from_odoo, sync_state FROM leads WHERE import_key = ?", ["local:nuevo"]),
+    ).toMatchObject({ active: 1, missing_from_odoo: 0, sync_state: "pending_create" });
+    await expect(commitSnapshot(db, { snapshotId: "odoo-2026-10-19" })).rejects.toThrow(/no tiene leads/);
+    await expect(commitSnapshot(db, {})).rejects.toThrow(/Falta snapshotId/);
   });
 });

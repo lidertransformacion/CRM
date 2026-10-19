@@ -3,7 +3,7 @@
 import * as React from "react";
 import { ChevronsLeft, ChevronsRight } from "lucide-react";
 import type { LeadRecord } from "@/lib/db";
-import type { StageDef } from "@/lib/odoo/stages";
+import { STAGES, type StageDef } from "@/lib/odoo/stages";
 import { cn, cop } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Segmented } from "@/components/ui/segmented";
@@ -53,8 +53,28 @@ export function Kanban({
     return map;
   }, [leads]);
 
-  // Columnas del celular: las abiertas y, salvo con el foco en "Abiertas", también las cerradas (completas).
-  const mobileStages = React.useMemo(() => (focus === "open" ? OPEN_STAGE_DEFS : [...OPEN_STAGE_DEFS, ...CLOSED_STAGE_DEFS]), [focus]);
+  const extraStages = React.useMemo(() => {
+    const known = new Set(STAGES.map((stage) => stage.name));
+    return [...byStage.keys()]
+      .filter((name) => !known.has(name))
+      .sort((a, b) => a.localeCompare(b, "es"))
+      .map(
+        (name): StageDef => ({
+          name,
+          position: STAGES.length + 1,
+          isWon: false,
+          isLost: false,
+          teamRestriction: "all",
+          short: name,
+        }),
+      );
+  }, [byStage]);
+
+  // Columnas del celular: las abiertas (y las que Odoo envió sin mapa) y, salvo con el foco en "Abiertas", también las cerradas.
+  const mobileStages = React.useMemo(
+    () => (focus === "open" ? [...OPEN_STAGE_DEFS, ...extraStages] : [...OPEN_STAGE_DEFS, ...extraStages, ...CLOSED_STAGE_DEFS]),
+    [focus, extraStages],
+  );
   const current = Math.min(activeIndex, mobileStages.length - 1);
 
   // En el celular, seguir la columna visible para marcar el selector y el indicador "n/9".
@@ -187,7 +207,7 @@ export function Kanban({
         ref={scrollerRef}
         className="relative flex items-start gap-3 overflow-x-auto pb-3 max-sm:-mx-4 max-sm:snap-x max-sm:snap-mandatory max-sm:scroll-pl-4 max-sm:px-4"
       >
-        {OPEN_STAGE_DEFS.map((stage) => {
+        {[...OPEN_STAGE_DEFS, ...extraStages].map((stage) => {
           const cards = byStage.get(stage.name) ?? [];
           return (
             <Column key={stage.name} stage={stage} count={cards.length} revenue={sumRevenue(cards)} over={over === stage.name} dragging={!!dragging} {...dropProps(stage.name)}>

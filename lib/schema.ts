@@ -203,6 +203,11 @@ CREATE TABLE IF NOT EXISTS odoo_outbound (
   updated_at TEXT NOT NULL,
   acked_at TEXT
 );
+CREATE TABLE IF NOT EXISTS odoo_snapshot_seen (
+  snapshot_id TEXT NOT NULL,
+  odoo_id TEXT NOT NULL,
+  PRIMARY KEY (snapshot_id, odoo_id)
+);
 CREATE TABLE IF NOT EXISTS odoo_sync_log (
   id INTEGER PRIMARY KEY,
   at TEXT NOT NULL,
@@ -234,7 +239,7 @@ CREATE INDEX IF NOT EXISTS committee_docs_number ON committee_docs(number);
 `;
 
 /** Bump when SCHEMA gains indexes or columns so an existing D1 applies them once. */
-export const SCHEMA_VERSION = "2";
+export const SCHEMA_VERSION = "3";
 
 /** Applied when an older local file is missing columns added after the first release. */
 export const ALTERS = [
