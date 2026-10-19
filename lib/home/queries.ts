@@ -1,5 +1,7 @@
-import { currentCommittee, kpiData, listEquipment, listLeads, type EquipmentRow, type LeadRecord } from "@/lib/db";
+import { getDb, type EquipmentRow, type LeadRecord } from "@/lib/db";
+import { recordTiming } from "@/lib/observe";
 import type { SqlDb } from "@/lib/sql/types";
+import { computeKpis, type ActivityFact, type LeadFact } from "@/lib/kpi/compute";
 import { boardStats, carryCount, closedSinceLast, flatten, isCarried, isOpen, isOverdue, personStats } from "@/lib/committee/metrics";
 import type { CommitteeDoc } from "@/lib/committee/types";
 import { siteById } from "@/lib/equipment/catalog";
@@ -221,18 +223,48 @@ export function committeeSummary(doc: CommitteeDoc, asOf: string): CommitteeSumm
   };
 }
 
-/** Todo lo que Inicio necesita, en objetos planos listos para renderizar. */
+/** Todo lo que Inicio necesita, en objetos planos listos para renderizar. Una sola ida a D1. */
 export async function homeData(asOf = todayIso(), db?: SqlDb): Promise<HomeData> {
-  const { doc } = await currentCommittee(db);
+  const sql = db ?? (await getDb());
+  const started = performance.now();
+  const [committeeRows, leadRows, equipmentRows, maintenanceRows, activityRows] = await sql.batch([
+    { sql: "SELECT payload FROM committee_docs WHERE is_current = 1" },
+    {
+      sql: `SELECT import_key, name, stage, salesperson, customer, expected_revenue, probability, created_at, active, won_status, next_activity_deadline FROM leads`,
+    },
+    {
+      sql: `SELECT serial, name, site_id, store_code, warranty_until, warranty_state, maintenance_every_days, client_name, status, delivered_on FROM equipment`,
+    },
+    { sql: "SELECT serial, MAX(performed_on) AS last_on FROM maintenance_logs GROUP BY serial" },
+    { sql: "SELECT assignee, deadline, state FROM activities" },
+  ]);
+  recordTiming("db", performance.now() - started);
+  const payload = (committeeRows[0] as { payload: string } | undefined)?.payload;
+  if (!payload) throw new Error("No hay comité vigente.");
+  const doc = JSON.parse(payload) as CommitteeDoc;
+  const leads = leadRows as LeadRecord[];
+  const facts: LeadFact[] = leads.map((lead) => ({
+    importKey: lead.import_key,
+    name: lead.name,
+    stage: lead.stage,
+    salesperson: lead.salesperson,
+    customer: lead.customer,
+    expectedRevenue: lead.expected_revenue,
+    probability: lead.probability,
+    createdAt: lead.created_at,
+    active: !!lead.active,
+    wonStatus: lead.won_status,
+  }));
+  const kpis = computeKpis(facts, activityRows as ActivityFact[], asOf);
+  const lastMaintenance = new Map((maintenanceRows as { serial: string; last_on: string }[]).map((row) => [row.serial, row.last_on]));
   const pendientes = pendienteAlerts(doc, asOf);
-  const leads = leadAlerts(await listLeads(db), asOf);
-  const equipment = equipmentAlerts(await listEquipment(db), await lastMaintenanceBySerial(db), asOf);
-  const kpis = await kpiData(asOf, db);
+  const alerts = leadAlerts(leads, asOf);
+  const equipment = equipmentAlerts(equipmentRows as EquipmentRow[], lastMaintenance, asOf);
   return {
     asOf,
     committee: committeeSummary(doc, asOf),
     pendientes: { rows: pendientes.slice(0, PENDIENTES_LIMIT), total: pendientes.length },
-    leads: { rows: leads.slice(0, LEADS_LIMIT), total: leads.length },
+    leads: { rows: alerts.slice(0, LEADS_LIMIT), total: alerts.length },
     equipment,
     revenue: { expected: kpis.team.expectedRevenue, weighted: kpis.team.weightedRevenue, openCount: kpis.team.open },
   };

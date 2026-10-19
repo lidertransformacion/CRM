@@ -7,7 +7,7 @@ import { getSql } from "@/lib/sql";
 
 export const dynamic = "force-dynamic";
 
-/** Drains the queue. MAIL_MODE=log records the message and does not call Gmail. */
+/** Drains the queue when MAIL_MODE=gmail_api. Log mode leaves rows queued. */
 export async function POST(request: Request) {
   try {
     await hydrateProcessEnv();

@@ -136,7 +136,7 @@ export function Drafts({
 
   return (
     <div className="page">
-      <PageHeader eyebrow="Comercial" title="Correos" description="Elige una plantilla y una oportunidad. Puedes copiar el borrador o encolarlo. Con el modo registro, procesar no llama a Gmail." />
+      <PageHeader eyebrow="Comercial" title="Correos" description="Elige una plantilla y una oportunidad. Puedes copiar el borrador o encolarlo. Con el modo registro, encolar no envía el correo." />
 
       {templates.length === 0 ? (
         <Card>

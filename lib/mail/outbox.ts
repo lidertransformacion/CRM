@@ -1,5 +1,6 @@
 import { recipientOptedOut } from "@/lib/auth/users";
 import { deliverMail } from "@/lib/mail/deliver";
+import { mailMode } from "@/lib/mail/message";
 import type { SqlDb } from "@/lib/sql/types";
 
 export type OutboxRow = {
@@ -98,6 +99,14 @@ export async function processOutbox(
     [nowIso, options.limit ?? 25],
   );
   const summary = { sent: 0, failed: 0, skipped: 0, queued: 0 };
+  if (!options.deliver && (await mailMode()) === "log") {
+    summary.queued = rows.length;
+    await db.run(
+      `INSERT INTO app_settings (key, value) VALUES ('mail_last_run', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+      [JSON.stringify({ at: nowIso, ...summary, mode: "log" })],
+    );
+    return summary;
+  }
   for (const row of rows) {
     if (await recipientOptedOut(db, row.to_email)) {
       await db.run(`UPDATE email_outbox SET status = 'skipped', updated_at = ?, last_error = ? WHERE id = ?`, [

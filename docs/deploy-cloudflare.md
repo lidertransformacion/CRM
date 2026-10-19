@@ -41,17 +41,38 @@ The build image defaults to Node.js 24. This repository's `.nvmrc` is `22.14.0`,
 | D1 database id | `ded1c012-2e0a-4b1b-9339-24047b32a99e` |
 | `MAIL_MODE` | `log` |
 | `SHEETS_SYNC_ENABLED` | `false` |
+| Cron | `*/5 * * * *` |
 
 These plain vars are also committed: `MAIL_FROM_ADDRESS`, `MAIL_FROM_NAME`, `GOOGLE_SHEETS_SPREADSHEET_ID`, `GOOGLE_SHEETS_TAB`, and `BOOTSTRAP_ADMIN_EMAIL`.
 
-These stay secrets. They are not in `wrangler.jsonc`, `.env.example` values, or Git:
+`MAIL_MODE=log` only queues mail. It does not call Gmail and it does not mark the row sent. The cron and the request path both skip the outbox in that mode.
 
-- `SESSION_SECRET`
-- `BOOTSTRAP_ADMIN_PASSWORD`
-- `GMAIL_TOKEN_JSON`
-- `GOOGLE_SHEETS_CLIENT_EMAIL`
-- `GOOGLE_SHEETS_PRIVATE_KEY`
-- `ODOO_AGENT_TOKEN`
+## Secrets to set
+
+Set these in the Worker **crm-libertario**, **Settings** → **Variables and Secrets**. They are not in `wrangler.jsonc` or Git.
+
+To send mail, set this secret and then change the plain var `MAIL_MODE` from `log` to `gmail_api` (a var, not a secret):
+
+| Secret | Required when | Value |
+| --- | --- | --- |
+| `GMAIL_TOKEN_JSON` | Sending mail (`MAIL_MODE=gmail_api`) | JSON with `client_id`, `client_secret`, and `refresh_token`. The refresh token is the OAuth token for `lidertransformacion@libertariocoffee.com`. The From address is the var `MAIL_FROM_ADDRESS` (`lidertransformacion@libertariocoffee.com`) and the display name is the var `MAIL_FROM_NAME` (`Comercial Libertario`). |
+
+With `MAIL_MODE=gmail_api`, `POST /api/correos/outbox/process` sends due rows through the Gmail API. A failed attempt is requeued with backoff (1 minute, 5 minutes, 15 minutes, 1 hour) and marked failed after 5 attempts. The cron `*/5 * * * *` drains the outbox, and each request also schedules a drain with `waitUntil` after the response. `MAIL_MODE=log` does neither.
+
+These secrets are already required for sign-in. Rotating `BOOTSTRAP_ADMIN_PASSWORD` does not change an admin that already exists.
+
+| Secret | Required when | Value |
+| --- | --- | --- |
+| `SESSION_SECRET` | Always | HMAC key for the session cookie, at least 16 characters |
+| `BOOTSTRAP_ADMIN_PASSWORD` | First boot, if the admin user is missing | Initial password, at least 12 characters |
+
+Set these only when the matching feature is turned on:
+
+| Secret | Required when | Value |
+| --- | --- | --- |
+| `GOOGLE_SHEETS_CLIENT_EMAIL` | `SHEETS_SYNC_ENABLED=true` | Service account email |
+| `GOOGLE_SHEETS_PRIVATE_KEY` | `SHEETS_SYNC_ENABLED=true` | PKCS8 private key |
+| `ODOO_AGENT_TOKEN` | The browser agent calls `/api/agent/*` | Bearer token, at least 16 characters |
 
 Set or rotate one with `npx wrangler secret put <NAME>` from a trusted machine. The command prompts for the value.
 

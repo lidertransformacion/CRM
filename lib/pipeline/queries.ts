@@ -23,8 +23,10 @@ async function sqlOf(db?: SqlDb): Promise<SqlDb> {
 }
 
 /** Una oportunidad por su import_key, o null si no existe. */
+const LEAD_DETAIL_SQL = `SELECT import_key, name, stage, team, salesperson, customer, expected_revenue, probability, created_at, expected_close, closed_at, won_status, active, loss_reason, tags, next_activity_type, next_activity_summary, next_activity_deadline, edited_locally FROM leads WHERE import_key = ?`;
+
 export async function leadByKey(importKey: string, db?: SqlDb): Promise<LeadRecord | null> {
-  const row = await (await sqlOf(db)).get<LeadRecord>("SELECT * FROM leads WHERE import_key = ?", [importKey]);
+  const row = await (await sqlOf(db)).get<LeadRecord>(LEAD_DETAIL_SQL, [importKey]);
   return row ? { ...row } : null;
 }
 
@@ -51,7 +53,15 @@ export async function activitiesForLeads(importKeys: string[], db?: SqlDb): Prom
 
 /** Oportunidad + sus actividades, para el panel de detalle del pipeline. */
 export async function leadDetail(importKey: string, db?: SqlDb): Promise<LeadDetail | null> {
-  const lead = await leadByKey(importKey, db);
+  const sql = await sqlOf(db);
+  const [leads, activities] = await sql.batch([
+    { sql: LEAD_DETAIL_SQL, params: [importKey] },
+    {
+      sql: "SELECT id, odoo_lead_id, document_name, summary, activity_type, deadline, state, created_at, note, assignee, lead_import_key FROM activities WHERE lead_import_key = ? ORDER BY COALESCE(deadline, substr(created_at, 1, 10)) ASC, id ASC",
+      params: [importKey],
+    },
+  ]);
+  const lead = leads[0] as LeadRecord | undefined;
   if (!lead) return null;
-  return { lead, activities: await activitiesForLead(importKey, db) };
+  return { lead: { ...lead }, activities: activities as ActivityRecord[] };
 }

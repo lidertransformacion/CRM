@@ -2,13 +2,15 @@ import path from "node:path";
 import { hydrateProcessEnv, readEnv } from "@/lib/env";
 import { loadImportBytes, loadImportText } from "@/lib/import/load";
 import { runSeed, type SeedReport } from "@/lib/seed/advance";
-import { getSql, isSqlDb, type SqlDb } from "@/lib/sql";
+import { getSql, isSetupReady, isSqlDb, markSetupReady, type SqlDb } from "@/lib/sql";
+import { ensureBootstrapAdmin } from "@/lib/auth/users";
+import { recordTiming } from "@/lib/observe";
 import { applyAction, createNextCommittee } from "@/lib/committee/mutate";
 import { cohortsFromDocs, diffDocuments } from "@/lib/committee/compare";
 import type { CommitteeAction, CommitteeDoc } from "@/lib/committee/types";
 import { assetNumber, siteById, storeCode } from "@/lib/equipment/catalog";
 import { maintenanceCost, parseWarranty } from "@/lib/equipment/warranty";
-import { computeKpis, type ActivityFact, type LeadFact } from "@/lib/kpi/compute";
+import { computeKpis, type ActivityFact } from "@/lib/kpi/compute";
 import { OdooSyncAdapter, type OdooCrmAdapter } from "@/lib/odoo/adapter";
 import { assignLeadKeys, mapActivityRow, mapLeadRow, mapTeamRows } from "@/lib/odoo/map";
 import { readXlsxBuffer, readXlsxRows } from "@/lib/odoo/xlsx";
@@ -88,8 +90,8 @@ async function attach(db: unknown) {
 }
 
 /**
- * Orders overlapping setup work. This is not a finished-setup cache:
- * every getDb() call schedules its own batch and bootstrap check.
+ * Orders overlapping setup work. Once this isolate has seen seed_complete=1,
+ * later requests skip the seed check. An unfinished seed still advances.
  */
 let setupTail: Promise<void> = Promise.resolve();
 
@@ -99,15 +101,31 @@ export async function openDatabase(file: string) {
 }
 
 export async function getDb(): Promise<SqlDb> {
-  await hydrateProcessEnv();
-  const db = await getSql();
-  const run = setupTail.then(() => advanceSeed(db, { maxBatches: 1 }));
-  setupTail = run.then(
-    () => undefined,
-    () => undefined,
-  );
-  await run;
-  return db;
+  const started = performance.now();
+  try {
+    await hydrateProcessEnv();
+    const db = await getSql();
+    if (isSetupReady()) return db;
+    const run = setupTail.then(async () => {
+      if (isSetupReady()) return;
+      const flag = await db.get<{ value: string }>("SELECT value FROM app_settings WHERE key = 'seed_complete'");
+      if (flag?.value === "1") {
+        await ensureBootstrapAdmin(db);
+        markSetupReady();
+        return;
+      }
+      const report = await advanceSeed(db, { maxBatches: 1 });
+      if (report.complete) markSetupReady();
+    });
+    setupTail = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    await run;
+    return db;
+  } finally {
+    recordTiming("setup", performance.now() - started);
+  }
 }
 
 export async function advanceSeed(db?: unknown, options?: { maxBatches?: number; reset?: boolean }): Promise<SeedReport> {
@@ -344,9 +362,12 @@ export type LeadRecord = {
   edited_locally: number;
 };
 
-export async function listLeads(db?: unknown): LeadRecord[] {
-  const sql = await sqlOf(db);
-  return plainRows(await sql.prepare("SELECT * FROM leads").all() as LeadRecord[]);
+/** Columns the board and the list render. The sheet loads tags, loss reason, and activity text by key. */
+const LEAD_LIST_SQL = `SELECT import_key, name, stage, team, salesperson, customer, expected_revenue, probability, created_at, next_activity_deadline, active, edited_locally, won_status FROM leads`;
+
+export async function listLeads(db?: unknown): Promise<LeadRecord[]> {
+  const sql = await rawDb(db);
+  return plainRows(await sql.all<LeadRecord>(LEAD_LIST_SQL));
 }
 
 export async function updateLead(importKey: string, patch: Record<string, string | number | null>, db?: unknown) {
@@ -385,6 +406,61 @@ export async function updateLead(importKey: string, patch: Record<string, string
   );
 }
 
+export async function globalSearch(query: string, db?: unknown) {
+  const sql = await rawDb(db);
+  const like = `%${query.trim()}%`;
+  const [leads, equipment, clients] = await sql.batch([
+    {
+      sql: `SELECT import_key, name, customer, salesperson, stage, expected_revenue FROM leads
+            WHERE name LIKE ? OR customer LIKE ? OR salesperson LIKE ?
+            ORDER BY customer LIMIT 6`,
+      params: [like, like, like],
+    },
+    {
+      sql: `SELECT serial, name, store_code, asset_number, client_name FROM equipment
+            WHERE serial LIKE ? OR name LIKE ? OR store_code LIKE ? OR asset_number LIKE ? OR IFNULL(client_name, '') LIKE ?
+            ORDER BY store_code LIMIT 6`,
+      params: [like, like, like, like, like],
+    },
+    {
+      sql: `SELECT customer, opportunities, pipeline, comodatos FROM (
+              SELECT lead_stats.customer AS customer,
+                     lead_stats.opportunities AS opportunities,
+                     lead_stats.pipeline AS pipeline,
+                     COALESCE(equip_stats.comodatos, 0) AS comodatos
+              FROM (
+                SELECT customer, COUNT(*) AS opportunities,
+                       SUM(CASE WHEN active = 1
+                         AND lower(COALESCE(won_status, '')) NOT IN ('ganado', 'won', 'perdido', 'lost')
+                         AND stage NOT IN ('CIERRE/ GANADO', 'OPORTUNIDAD PERDIDA', 'CLIENTE RECURRENTE')
+                         THEN COALESCE(expected_revenue, 0) ELSE 0 END) AS pipeline
+                FROM leads WHERE customer LIKE ? GROUP BY customer
+              ) AS lead_stats
+              LEFT JOIN (
+                SELECT client_name AS customer, COUNT(*) AS comodatos
+                FROM equipment WHERE client_name LIKE ? GROUP BY client_name
+              ) AS equip_stats ON equip_stats.customer = lead_stats.customer
+              UNION
+              SELECT equip_stats.customer, 0, 0, equip_stats.comodatos
+              FROM (
+                SELECT client_name AS customer, COUNT(*) AS comodatos
+                FROM equipment WHERE client_name LIKE ? GROUP BY client_name
+              ) AS equip_stats
+              LEFT JOIN (
+                SELECT customer FROM leads WHERE customer LIKE ? GROUP BY customer
+              ) AS lead_names ON lead_names.customer = equip_stats.customer
+              WHERE lead_names.customer IS NULL
+            ) ORDER BY pipeline DESC, customer LIMIT 6`,
+      params: [like, like, like, like],
+    },
+  ]);
+  return {
+    leads: leads as { import_key: string; name: string; customer: string; stage: string }[],
+    equipment: equipment as { serial: string; name: string; store_code: string; client_name: string | null }[],
+    clients: clients as { customer: string; opportunities: number; pipeline: number; comodatos: number }[],
+  };
+}
+
 export async function searchLeads(query: string, db?: unknown) {
   const sql = await sqlOf(db);
   const like = `%${query.trim()}%`;
@@ -407,10 +483,15 @@ export async function leadLabel(importKey: string | null, db?: unknown) {
   );
 }
 
-async function leadFacts(db?: unknown): LeadFact[] {
-  const sql = await sqlOf(db);
-  return (await sql.prepare("SELECT import_key, name, stage, salesperson, customer, expected_revenue, probability, created_at, active, won_status FROM leads").all() as LeadRecord[]).map(
-    (lead) => ({
+export async function kpiData(asOf = todayIso(), db?: unknown) {
+  const sql = await rawDb(db);
+  const [activities, leads, targets] = await sql.batch([
+    { sql: "SELECT assignee, deadline, state FROM activities" },
+    { sql: "SELECT import_key, name, stage, salesperson, customer, expected_revenue, probability, created_at, active, won_status FROM leads" },
+    { sql: "SELECT id, salesperson, metric, period, target_value FROM kpi_targets ORDER BY period, salesperson" },
+  ]);
+  const bundle = computeKpis(
+    (leads as LeadRecord[]).map((lead) => ({
       importKey: lead.import_key,
       name: lead.name,
       stage: lead.stage,
@@ -421,24 +502,23 @@ async function leadFacts(db?: unknown): LeadFact[] {
       createdAt: lead.created_at,
       active: !!lead.active,
       wonStatus: lead.won_status,
-    }),
+    })),
+    activities as ActivityFact[],
+    asOf,
   );
-}
-
-export async function kpiData(asOf = todayIso(), db?: unknown) {
-  const sql = await sqlOf(db);
-  const activities = await sql.prepare("SELECT assignee, deadline, state FROM activities").all() as ActivityFact[];
-  const bundle = computeKpis(await leadFacts(db), activities, asOf);
-  const targets = plainRows(
-    await sql.prepare("SELECT id, salesperson, metric, period, target_value FROM kpi_targets ORDER BY period, salesperson").all() as {
-      id: number;
-      salesperson: string;
-      metric: string;
-      period: string;
-      target_value: number;
-    }[],
-  );
-  return { ...bundle, targets, metricsReady: true };
+  return {
+    ...bundle,
+    targets: plainRows(
+      targets as {
+        id: number;
+        salesperson: string;
+        metric: string;
+        period: string;
+        target_value: number;
+      }[],
+    ),
+    metricsReady: true,
+  };
 }
 
 export async function saveTarget(input: { salesperson: string; metric: string; period: string; targetValue: number }, db?: unknown) {
@@ -454,9 +534,10 @@ export async function deleteTarget(id: number, db?: unknown) {
   await sql.prepare("DELETE FROM kpi_targets WHERE id = ?").run(id);
 }
 
-export async function listEquipment(db?: unknown): EquipmentRow[] {
-  const sql = await sqlOf(db);
-  return plainRows(await sql.prepare("SELECT * FROM equipment ORDER BY site_id, site_seq").all() as EquipmentRow[]);
+/** Full rows, including sheet cell JSON. The desk uses equipmentDesk(), which omits that JSON. */
+export async function listEquipment(db?: unknown): Promise<EquipmentRow[]> {
+  const sql = await rawDb(db);
+  return plainRows(await sql.all<EquipmentRow>("SELECT * FROM equipment ORDER BY site_id, site_seq"));
 }
 
 export async function getEquipment(serial: string, db?: unknown): EquipmentRow | undefined {

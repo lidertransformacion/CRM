@@ -61,15 +61,15 @@ export function OutboxPanel({ refreshKey }: { refreshKey: number }) {
     setProcessing(true);
     try {
       const response = await fetch("/api/correos/outbox/process", { method: "POST" });
-      const body = (await response.json()) as { error?: string; sent?: number; failed?: number; skipped?: number; mode?: string };
+      const body = (await response.json()) as { error?: string; sent?: number; failed?: number; skipped?: number; queued?: number; mode?: string };
       if (!response.ok) throw new Error(body.error || "No se pudo procesar.");
       if (body.mode) setMode(body.mode);
       toast({
-        title: body.mode === "log" ? "Quedó registrado" : "Bandeja procesada",
+        title: body.mode === "log" ? "Sigue en cola" : "Bandeja procesada",
         description:
           body.mode === "log"
-            ? `${body.sent ?? 0} correo(s) quedaron en el registro. Gmail no se llamó.`
-            : `Enviados ${body.sent ?? 0}, fallidos ${body.failed ?? 0}, omitidos ${body.skipped ?? 0}.`,
+            ? "El modo registro no envía. Gmail no se llamó."
+            : `Enviados ${body.sent ?? 0}, en cola ${body.queued ?? 0}, fallidos ${body.failed ?? 0}, omitidos ${body.skipped ?? 0}.`,
       });
       await load();
     } catch (error) {
@@ -95,7 +95,7 @@ export function OutboxPanel({ refreshKey }: { refreshKey: number }) {
         title="Bandeja de salida"
         description={
           mode === "log"
-            ? "El modo actual es registro. Procesar marca el correo y no llama a Gmail."
+            ? "El modo actual es registro. Los correos quedan en cola y no se envían."
             : mode === "gmail_api"
               ? "El modo actual envía por la API de Gmail."
               : "El modo actual usa SMTP."

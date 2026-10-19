@@ -6,13 +6,12 @@ import {
   createEquipment,
   getEquipment,
   hourlyRate,
-  listEquipment,
   setHourlyRate,
   sheetPlans,
   updateEquipment,
   type EquipmentInput,
 } from "@/lib/db";
-import { nextMaintenanceBySerial, nextMaintenanceFor } from "@/lib/equipment/queries";
+import { equipmentDesk, nextMaintenanceFor } from "@/lib/equipment/queries";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -22,25 +21,16 @@ const CATALOG_KINDS = new Set(["category", "client", "supplier", "city"]);
 export async function GET(request: Request) {
   const view = new URL(request.url).searchParams.get("view");
   if (view === "sync") return NextResponse.json(await sheetPlans());
-  const equipment = await listEquipment();
-  const [nextMaintenance, rate, categories, clients, cities, suppliers, salespeople] = await Promise.all([
-    nextMaintenanceBySerial(equipment),
-    hourlyRate(),
-    catalogValues("category"),
-    catalogValues("client"),
-    catalogValues("city"),
-    catalogValues("supplier"),
-    catalogValues("salesperson"),
-  ]);
+  const desk = await equipmentDesk();
   return NextResponse.json({
-    equipment,
-    nextMaintenance,
-    hourlyRate: rate,
-    categories,
-    clients,
-    cities,
-    suppliers,
-    salespeople,
+    equipment: desk.equipment,
+    nextMaintenance: desk.nextMaintenance,
+    hourlyRate: desk.hourlyRate,
+    categories: desk.categories,
+    clients: desk.clients,
+    cities: desk.cities,
+    suppliers: desk.suppliers,
+    salespeople: desk.salespeople,
   });
 }
 

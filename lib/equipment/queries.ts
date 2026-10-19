@@ -1,6 +1,63 @@
 import { getDb, type EquipmentRow } from "@/lib/db";
+import { recordTiming } from "@/lib/observe";
 import type { SqlDb } from "@/lib/sql/types";
 import { addDays } from "@/lib/utils";
+
+const DESK_SQL = `SELECT serial, asset_number, name, category, site_id, site_seq, store_code, supplier, supplier_reference, model,
+      warranty_until, warranty_state, maintenance_every_days, hours_min, hours_max, hours_label,
+      client_name, address, city, status, delivered_on, salesperson, lead_import_key, notes, created_at, updated_at
+    FROM equipment ORDER BY site_id, site_seq`;
+
+export type EquipmentDeskData = {
+  equipment: EquipmentRow[];
+  nextMaintenance: NextMaintenanceMap;
+  hourlyRate: number;
+  categories: string[];
+  clients: string[];
+  cities: string[];
+  suppliers: string[];
+  salespeople: string[];
+};
+
+/** List, next maintenance, rate, and catalogs in one D1 batch. */
+export async function equipmentDesk(db?: SqlDb): Promise<EquipmentDeskData> {
+  const sql = db ?? (await getDb());
+  const started = performance.now();
+  const [equipmentRows, maintenanceRows, rateRows, catalogRows] = await sql.batch([
+    { sql: DESK_SQL },
+    { sql: "SELECT serial, MAX(performed_on) AS last_on FROM maintenance_logs GROUP BY serial" },
+    { sql: "SELECT value FROM app_settings WHERE key = ?", params: ["maintenance_hourly_rate_cop"] },
+    {
+      sql: `SELECT kind, value FROM catalogs WHERE kind IN ('category', 'client', 'city', 'supplier', 'salesperson') ORDER BY sort_order, value`,
+    },
+  ]);
+  recordTiming("db", performance.now() - started);
+  const last = Object.fromEntries((maintenanceRows as { serial: string; last_on: string }[]).map((row) => [row.serial, row.last_on]));
+  const equipment = equipmentRows as EquipmentRow[];
+  const nextMaintenance: NextMaintenanceMap = {};
+  for (const row of equipment) {
+    nextMaintenance[row.serial] = nextMaintenanceDate({
+      everyDays: row.maintenance_every_days,
+      lastPerformedOn: last[row.serial] ?? null,
+      deliveredOn: row.delivered_on,
+    });
+  }
+  const lists: Record<string, string[]> = { category: [], client: [], city: [], supplier: [], salesperson: [] };
+  for (const row of catalogRows as { kind: string; value: string }[]) {
+    lists[row.kind]?.push(row.value);
+  }
+  const rate = Number((rateRows[0] as { value: string } | undefined)?.value ?? 50000);
+  return {
+    equipment,
+    nextMaintenance,
+    hourlyRate: rate,
+    categories: lists.category,
+    clients: lists.client,
+    cities: lists.city,
+    suppliers: lists.supplier,
+    salespeople: lists.salesperson,
+  };
+}
 
 /** Fecha del próximo mantenimiento por serial. `null` significa "Sin fecha base". */
 export type NextMaintenanceMap = Record<string, string | null>;

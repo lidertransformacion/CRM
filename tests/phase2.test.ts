@@ -56,7 +56,7 @@ afterEach(() => {
 });
 
 describe("email outbox", () => {
-  it("records mail in log mode and does not call Gmail", async () => {
+  it("keeps mail queued in log mode and does not call Gmail", async () => {
     vi.stubEnv("MAIL_MODE", "log");
     vi.stubEnv("MAIL_FROM_ADDRESS", "");
     vi.stubEnv("MAIL_FROM_NAME", "");
@@ -67,10 +67,11 @@ describe("email outbox", () => {
     const second = await enqueueEmail(db, { to: "cliente@hotel.com", subject: "Oferta", body: "Hola", dedupeKey: "oferta:1" });
     expect(second).toMatchObject({ id: first.id, deduped: true });
     const summary = await processOutbox(db);
-    expect(summary.sent).toBe(1);
+    expect(summary.sent).toBe(0);
+    expect(summary.queued).toBe(1);
     expect(fetchSpy).not.toHaveBeenCalled();
-    const row = await db.get<{ status: string; provider_message_id: string }>("SELECT status, provider_message_id FROM email_outbox WHERE id = ?", [first.id]);
-    expect(row).toMatchObject({ status: "sent", provider_message_id: "log" });
+    const row = await db.get<{ status: string; provider_message_id: string | null }>("SELECT status, provider_message_id FROM email_outbox WHERE id = ?", [first.id]);
+    expect(row).toMatchObject({ status: "queued", provider_message_id: null });
     expect(await deliverMail({ to: "cliente@hotel.com", subject: "Asunto", text: "Cuerpo" })).toBe("log");
     const message = rfc822({
       to: "cliente@hotel.com",
@@ -129,10 +130,18 @@ describe("email outbox", () => {
     );
     expect(id).toBe("gmail-1");
     expect(fetchSpy).toHaveBeenCalledTimes(2);
+    const { db } = await tempSql();
+    await enqueueEmail(db, { to: "cliente@hotel.com", subject: "Oferta", body: "Hola" });
+    vi.stubEnv("MAIL_MODE", "gmail_api");
+    vi.stubGlobal("fetch", fetchSpy);
+    const summary = await processOutbox(db);
+    expect(summary.sent).toBe(1);
+    const sent = await db.get<{ status: string; provider_message_id: string }>("SELECT status, provider_message_id FROM email_outbox WHERE subject = ?", ["Oferta"]);
+    expect(sent).toMatchObject({ status: "sent", provider_message_id: "gmail-1" });
+    fetchSpy.mockClear();
     vi.stubEnv("MAIL_MODE", "log");
-    const globalFetch = vi.spyOn(globalThis, "fetch");
     expect(await deliverMail({ to: "cliente@hotel.com", subject: "Oferta", text: "Hola" })).toBe("log");
-    expect(globalFetch).not.toHaveBeenCalled();
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 });
 
