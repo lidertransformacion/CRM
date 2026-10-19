@@ -1,15 +1,16 @@
 "use client";
 
 import * as React from "react";
-import Link from "next/link";
+import Link, { useLinkStatus } from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { Menu, Search } from "lucide-react";
+import { LoaderCircle, Menu, Search } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Kbd } from "@/components/ui/kbd";
 import { Sheet, SheetContent, SheetBody } from "@/components/ui/sheet";
 import { CommandPalette } from "@/components/shell/CommandPalette";
 import { LogoMark } from "@/components/shell/LogoMark";
 import { CommandPaletteContext } from "@/components/shell/command-palette-context";
+import { NavigationProgress } from "@/components/shell/NavigationProgress";
 import { NAV, currentSection, isActive } from "@/components/shell/nav";
 
 export function AppShell({ children }: { children: React.ReactNode }) {
@@ -47,6 +48,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   return (
     <CommandPaletteContext.Provider value={palette}>
+      <React.Suspense fallback={null}>
+        <NavigationProgress />
+      </React.Suspense>
       <div className="min-h-dvh">
         <aside
           className="fixed inset-y-0 left-0 z-30 hidden w-[var(--sidebar-w)] flex-col bg-navy text-crema lg:flex"
@@ -160,16 +164,7 @@ function SidebarNav({ pathname }: { pathname: string }) {
                 : "text-crema/75 hover:bg-white/8 hover:text-white",
             )}
           >
-            <span
-              className={cn(
-                "flex size-8 shrink-0 items-center justify-center rounded-md",
-                active
-                  ? "bg-amarillo text-navy"
-                  : "bg-white/8 text-crema/80 group-hover:bg-white/12",
-              )}
-            >
-              <Icon className="size-4" />
-            </span>
+            <NavIcon icon={Icon} active={active} />
             <span className="min-w-0 leading-tight">
               <span className="block text-sm font-medium">{item.label}</span>
               <span
@@ -210,5 +205,15 @@ function SidebarFooter() {
       </div>
       <p>No envía correos ni escribe en Odoo.</p>
     </div>
+  );
+}
+
+/** Icono del menú: muestra un spinner mientras Next carga la sección (useLinkStatus). */
+function NavIcon({ icon: Icon, active }: { icon: React.ComponentType<{ className?: string }>; active: boolean }) {
+  const { pending } = useLinkStatus();
+  return (
+    <span className={cn("flex size-8 shrink-0 items-center justify-center rounded-md", active ? "bg-amarillo text-navy" : "bg-white/8 text-crema/80 group-hover:bg-white/12")}>
+      {pending ? <LoaderCircle className="size-4 animate-spin" aria-label="Cargando" /> : <Icon className="size-4" />}
+    </span>
   );
 }

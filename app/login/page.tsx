@@ -38,9 +38,12 @@ function LoginForm() {
 
   return (
     <main className="mx-auto flex min-h-dvh max-w-md flex-col justify-center px-4 py-10">
-      <Image src="/brand/logo-libertario-light.png" alt="Libertario" width={334} height={80} className="h-12 w-auto" priority unoptimized />
-      <h1 className="mt-4 text-3xl">CRM Libertario</h1>
-      <p className="mt-2 text-sm text-ink-2">Entra con tu correo de Libertario Coffee Roasters.</p>
+      <div className="flex flex-col items-center text-center">
+        <Image src="/brand/logo-libertario-navy.png" alt="Libertario Coffee co. & Roasters" width={1201} height={237} className="h-16 w-auto sm:h-20" priority unoptimized />
+        <p className="eyebrow mt-6">Equipo Comercial</p>
+        <h1 className="mt-1 text-3xl">CRM Libertario</h1>
+        <p className="mt-2 text-sm text-ink-2">Entra con tu correo de Libertario Coffee Roasters.</p>
+      </div>
       <Card className="mt-6">
         <CardBody>
           <form onSubmit={onSubmit} className="space-y-4">
