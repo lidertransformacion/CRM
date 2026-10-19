@@ -1,57 +1,85 @@
 "use client";
 
-import { useState } from "react";
-import { cop } from "@/lib/utils";
+import * as React from "react";
+import { usePathname, useSearchParams } from "next/navigation";
+import { ChevronLeft } from "lucide-react";
+import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
+import { PageHeader } from "@/components/ui/page-header";
+import { ClientDetail } from "@/components/clients/ClientDetail";
+import { ClientList, type ClientSort } from "@/components/clients/ClientList";
+import type { ClientRow, ClientTimelineResponse } from "@/components/clients/types";
 
-type Client = { customer: string; opportunities: number; pipeline: number; comodatos: number };
-type Event = { at: string; kind: string; title: string; detail: string };
+/**
+ * Lista + detalle de clientes. El cliente elegido vive en la URL (`?cliente=`) para que ⌘K,
+ * Inicio y Pipeline puedan enlazarlo. En el celular la lista se pliega al elegir uno.
+ */
+export function ClientExplorer({ clients }: { clients: ClientRow[] }) {
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const selected = searchParams.get("cliente");
 
-export function ClientExplorer({ clients }: { clients: Client[] }) {
-  const [q, setQ] = useState("");
-  const [selected, setSelected] = useState<string | null>(null);
-  const [events, setEvents] = useState<Event[]>([]);
-  const visible = clients.filter((client) => client.customer.toLowerCase().includes(q.toLowerCase())).slice(0, 40);
+  const [q, setQ] = React.useState("");
+  const [sort, setSort] = React.useState<ClientSort>("pipeline");
+  const [data, setData] = React.useState<ClientTimelineResponse | null>(null);
+  const [loading, setLoading] = React.useState(false);
+  const [error, setError] = React.useState<string | null>(null);
+  // En el celular, si se llega con ?cliente= la lista arranca plegada para ver el detalle de inmediato.
+  const [listOpen, setListOpen] = React.useState(() => !selected);
+  const [attempt, setAttempt] = React.useState(0);
 
-  async function open(customer: string) {
-    setSelected(customer);
-    const response = await fetch(`/api/clients?customer=${encodeURIComponent(customer)}`);
-    const payload = (await response.json()) as { events: Event[] };
-    setEvents(payload.events);
+  React.useEffect(() => {
+    if (!selected) {
+      setData(null);
+      setError(null);
+      return;
+    }
+    const controller = new AbortController();
+    setLoading(true);
+    setError(null);
+    fetch(`/api/clients?customer=${encodeURIComponent(selected)}`, { signal: controller.signal })
+      .then((response) => (response.ok ? (response.json() as Promise<ClientTimelineResponse>) : Promise.reject(new Error(String(response.status)))))
+      .then((payload) => setData(payload))
+      .catch((reason: unknown) => {
+        if (reason instanceof Error && reason.name === "AbortError") return;
+        setError("Revisa que el servidor esté corriendo y vuelve a intentarlo.");
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoading(false);
+      });
+    return () => controller.abort();
+  }, [selected, attempt]);
+
+  function select(customer: string) {
+    const params = new URLSearchParams(searchParams.toString());
+    params.set("cliente", customer);
+    window.history.replaceState(null, "", `${pathname}?${params.toString()}`);
+    setListOpen(false);
   }
 
+  const listHidden = !!selected && !listOpen;
+
   return (
-    <main className="mx-auto grid max-w-6xl gap-4 px-4 py-6 lg:grid-cols-[320px_minmax(0,1fr)]">
-      <section>
-        <p className="text-xs tracking-[0.16em] text-[#98a2b3]">SEGUIMIENTO</p>
-        <h1 className="font-serif text-4xl">Clientes</h1>
-        <input className="mt-3 h-10 w-full rounded-xl border bg-white px-3 text-sm" placeholder="Buscar cliente" value={q} onChange={(event) => setQ(event.target.value)} />
-        <div className="mt-3 space-y-2">
-          {visible.map((client) => (
-            <button key={client.customer} onClick={() => void open(client.customer)} className={`block w-full rounded-2xl bg-white p-3 text-left shadow-sm ${selected === client.customer ? "ring-2 ring-[var(--blue)]" : ""}`}>
-              <p className="font-medium">{client.customer}</p>
-              <p className="text-xs text-[#667085]">{client.opportunities} oportunidades · {client.comodatos} equipos · {cop(client.pipeline)}</p>
-            </button>
-          ))}
-        </div>
-      </section>
-      <section className="rounded-3xl bg-white p-5 shadow-sm">
-        {!selected && <p className="text-sm text-[#667085]">Elige un cliente para ver oportunidades, actividades, pendientes de comité y comodatos.</p>}
-        {selected && (
-          <>
-            <h2 className="font-semibold">{selected}</h2>
-            <div className="mt-4 space-y-3">
-              {events.length === 0 && <p className="text-sm text-[#667085]">No hay eventos para este cliente.</p>}
-              {events.map((event, index) => (
-                <div key={`${event.at}-${index}`} className="border-l-2 border-[#e4e7ef] pl-3">
-                  <p className="text-xs text-[#98a2b3]">{event.at} · {event.kind}</p>
-                  <p className="font-medium">{event.title}</p>
-                  <p className="text-sm text-[#667085]">{event.detail}</p>
-                </div>
-              ))}
-            </div>
-          </>
+    <div className="page">
+      <PageHeader eyebrow="Seguimiento" title="Clientes" description="Todo lo que ha pasado con cada cliente: oportunidades, actividades, pendientes de comité y equipos." />
+      <div className="grid gap-4 lg:grid-cols-[340px_minmax(0,1fr)] lg:items-start">
+        <ClientList
+          clients={clients}
+          q={q}
+          onQueryChange={setQ}
+          sort={sort}
+          onSortChange={setSort}
+          selected={selected}
+          onSelect={select}
+          className={cn(listHidden && "hidden lg:flex")}
+        />
+        {listHidden && (
+          <Button variant="secondary" className="justify-start lg:hidden" onClick={() => setListOpen(true)}>
+            <ChevronLeft />Cambiar de cliente
+          </Button>
         )}
-      </section>
-    </main>
+        <ClientDetail customer={selected} data={data} loading={loading} error={error} onRetry={() => setAttempt((value) => value + 1)} />
+      </div>
+    </div>
   );
 }

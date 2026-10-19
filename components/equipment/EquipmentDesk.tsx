@@ -1,336 +1,304 @@
 "use client";
 
-import Link from "next/link";
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { COMODATO_STATUSES, SITES, siteById, statusLabel, storeCode } from "@/lib/equipment/catalog";
-import { maintenanceCost, warrantyStateOn, type WarrantyState } from "@/lib/equipment/warranty";
+import * as React from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { Ellipsis, FileSpreadsheet, FunnelX, Plus, Settings } from "lucide-react";
 import type { EquipmentRow } from "@/lib/db";
-import { cop, todayIso } from "@/lib/utils";
+import { COMODATO_STATUSES, SITES } from "@/lib/equipment/catalog";
+import type { NextMaintenanceMap } from "@/lib/equipment/queries";
+import { Button } from "@/components/ui/button";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { PageHeader, Toolbar } from "@/components/ui/page-header";
+import { SearchInput } from "@/components/ui/search-input";
+import { Segmented } from "@/components/ui/segmented";
+import { Select } from "@/components/ui/select";
+import { Stat, StatGrid } from "@/components/ui/stat";
+import { useToast } from "@/components/ui/toast";
+import { cn } from "@/lib/utils";
+import { EquipmentSheet } from "@/components/equipment/EquipmentSheet";
+import { EquipmentTable, type SortKey, type SortState } from "@/components/equipment/EquipmentTable";
+import { SettingsDialog } from "@/components/equipment/SettingsDialog";
+import { SheetDiffDialog } from "@/components/equipment/SheetDiffDialog";
+import { CATALOG_KINDS, maintenanceNeedsAttention, warrantyOf, type CatalogKind, type Lists } from "@/components/equipment/model";
 
-const fieldClass = "w-full rounded-xl border border-[#e1e5ef] bg-white px-2.5 py-2 text-sm";
+const PAGE_SIZE = 50;
 
-type Lists = { categories: string[]; clients: string[]; cities: string[]; suppliers: string[]; salespeople: string[] };
+/** Vistas rápidas que aplican los indicadores de arriba (viven en la URL para poder enlazarlas). */
+type View = "" | "comodato" | "tienda" | "garantia" | "mantenimiento";
+type ClientFilter = "all" | "with" | "without";
+type Editor = { mode: "create" } | { mode: "edit"; serial: string } | null;
 
-const EMPTY = {
-  serial: "",
-  name: "",
-  category: "",
-  siteId: "COM",
-  supplier: "",
-  supplierReference: "",
-  model: "",
-  warrantyUntil: "",
-  everyDays: "90",
-  hoursMin: "1",
-  hoursMax: "3",
-  clientName: "",
-  address: "",
-  city: "",
-  status: "en_tienda",
-  deliveredOn: "",
-  salesperson: "",
-  notes: "",
-};
-
-function toForm(row: EquipmentRow) {
-  return {
-    serial: row.serial,
-    name: row.name,
-    category: row.category,
-    siteId: row.site_id,
-    supplier: row.supplier ?? "",
-    supplierReference: row.supplier_reference ?? "",
-    model: row.model ?? "",
-    warrantyUntil: row.warranty_until ?? "",
-    everyDays: row.maintenance_every_days ? String(row.maintenance_every_days) : "",
-    hoursMin: row.hours_min == null ? "" : String(row.hours_min),
-    hoursMax: row.hours_max == null ? "" : String(row.hours_max),
-    clientName: row.client_name ?? "",
-    address: row.address ?? "",
-    city: row.city ?? "",
-    status: row.status,
-    deliveredOn: row.delivered_on ?? "",
-    salesperson: row.salesperson ?? "",
-    notes: row.notes ?? "",
-  };
+function haystack(row: EquipmentRow): string {
+  return `${row.serial} ${row.name} ${row.store_code} ${row.asset_number} ${row.client_name ?? ""} ${row.category}`.toLowerCase();
 }
 
-export function EquipmentDesk({ initial, lists, hourlyRate }: { initial: EquipmentRow[]; lists: Lists; hourlyRate: number }) {
-  const [rows, setRows] = useState(initial);
-  const [catalogs, setCatalogs] = useState(lists);
-  const [rate, setRate] = useState(hourlyRate);
-  const [query, setQuery] = useState("");
-  const [site, setSite] = useState("");
-  const [status, setStatus] = useState("");
-  const [selected, setSelected] = useState<string | null>(initial[0]?.serial ?? null);
-  const [creating, setCreating] = useState(false);
-  const [form, setForm] = useState(() => (initial[0] ? toForm(initial[0]) : EMPTY));
-  const [message, setMessage] = useState("");
-  const [sync, setSync] = useState<string>("");
-  const serialRef = useRef<HTMLInputElement>(null);
+export function EquipmentDesk({
+  initial,
+  initialNext,
+  lists,
+  hourlyRate,
+  today,
+}: {
+  initial: EquipmentRow[];
+  initialNext: NextMaintenanceMap;
+  lists: Lists;
+  hourlyRate: number;
+  today: string;
+}) {
+  const router = useRouter();
+  const pathname = usePathname();
+  const params = useSearchParams();
+  const { toast } = useToast();
 
-  const filtered = useMemo(
-    () =>
-      rows.filter((row) => {
-        if (site && row.site_id !== site) return false;
-        if (status && row.status !== status) return false;
-        if (query && !`${row.serial} ${row.name} ${row.client_name ?? ""} ${row.store_code}`.toLowerCase().includes(query.toLowerCase())) return false;
-        return true;
-      }),
-    [rows, site, status, query],
+  const [rows, setRows] = React.useState(initial);
+  const [next, setNext] = React.useState(initialNext);
+  const [catalogs, setCatalogs] = React.useState(lists);
+  const [rate, setRate] = React.useState(hourlyRate);
+
+  const [query, setQuery] = React.useState("");
+  const [site, setSite] = React.useState("");
+  const [status, setStatus] = React.useState("");
+  const [category, setCategory] = React.useState("");
+  const [clientFilter, setClientFilter] = React.useState<ClientFilter>("all");
+  const view = (params.get("vista") ?? "") as View;
+
+  const [sort, setSort] = React.useState<SortState>({ key: "code", dir: "asc" });
+  const [page, setPage] = React.useState(1);
+
+  const [editor, setEditor] = React.useState<Editor>(null);
+  const [settingsOpen, setSettingsOpen] = React.useState(false);
+  const [diffOpen, setDiffOpen] = React.useState(false);
+
+  // `?nuevo=1` abre el formulario de alta (lo usa Inicio); `?editar=<serial>` abre ese equipo.
+  React.useEffect(() => {
+    if (params.get("nuevo") === "1") setEditor({ mode: "create" });
+    else if (params.get("editar")) setEditor({ mode: "edit", serial: params.get("editar")! });
+  }, [params]);
+
+  React.useEffect(() => setPage(1), [query, site, status, category, clientFilter, view, sort]);
+
+  const counts = React.useMemo(
+    () => ({
+      total: rows.length,
+      comodato: rows.filter((row) => row.status === "en_comodato").length,
+      tienda: rows.filter((row) => row.status === "en_tienda").length,
+      warranty: rows.filter((row) => warrantyOf(row, today) === "vencida").length,
+      maintenance: rows.filter((row) => maintenanceNeedsAttention(next[row.serial], today)).length,
+    }),
+    [rows, next, today],
   );
 
-  function load(row: EquipmentRow) {
-    setCreating(false);
-    setSelected(row.serial);
-    setMessage("");
-    setForm(toForm(row));
-  }
-
-  useEffect(() => {
-    if (creating) serialRef.current?.focus();
-  }, [creating]);
-
-  function startNew() {
-    setCreating(true);
-    setSelected(null);
-    setMessage("");
-    setForm({ ...EMPTY, category: catalogs.categories[0] ?? "" });
-  }
-
-  const previewCode = useMemo(() => {
-    if (!creating && selected) {
-      const current = rows.find((row) => row.serial === selected);
-      if (current && current.site_id === form.siteId) return current.store_code;
-    }
-    const max = rows.filter((row) => row.site_id === form.siteId).reduce((n, row) => Math.max(n, row.site_seq), 0);
-    return storeCode(form.siteId, max + 1);
-  }, [creating, selected, rows, form.siteId]);
-
-  const cost = maintenanceCost({
-    everyDays: form.everyDays ? Number(form.everyDays) : null,
-    hoursMin: form.hoursMin ? Number(form.hoursMin) : null,
-    hoursMax: form.hoursMax ? Number(form.hoursMax) : null,
-    hourlyRate: rate,
-  });
-
-  async function save() {
-    setMessage("");
-    const payload = {
-      serial: form.serial.trim(),
-      name: form.name.trim(),
-      category: form.category,
-      siteId: form.siteId,
-      supplier: form.supplier,
-      supplierReference: form.supplierReference,
-      model: form.model,
-      warrantyUntil: form.warrantyUntil || null,
-      everyDays: form.everyDays ? Number(form.everyDays) : null,
-      hoursMin: form.hoursMin ? Number(form.hoursMin) : null,
-      hoursMax: form.hoursMax ? Number(form.hoursMax) : null,
-      clientName: form.clientName || null,
-      address: form.address,
-      city: form.city,
-      status: form.clientName && form.status === "en_tienda" && creating ? "en_comodato" : form.status,
-      deliveredOn: form.deliveredOn || null,
-      salesperson: form.salesperson || null,
-      notes: form.notes,
-    };
-    const response = await fetch("/api/comodatos", {
-      method: creating ? "POST" : "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
+  const filtered = React.useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    return rows.filter((row) => {
+      if (view === "comodato" && row.status !== "en_comodato") return false;
+      if (view === "tienda" && row.status !== "en_tienda") return false;
+      if (view === "garantia" && warrantyOf(row, today) !== "vencida") return false;
+      if (view === "mantenimiento" && !maintenanceNeedsAttention(next[row.serial], today)) return false;
+      if (site && row.site_id !== site) return false;
+      if (status && row.status !== status) return false;
+      if (category && row.category !== category) return false;
+      if (clientFilter === "with" && !row.client_name) return false;
+      if (clientFilter === "without" && row.client_name) return false;
+      if (needle && !haystack(row).includes(needle)) return false;
+      return true;
     });
-    const body = (await response.json()) as { equipment?: EquipmentRow; error?: string };
-    if (!response.ok || !body.equipment) {
-      setMessage(body.error || "No se pudo guardar.");
-      return;
-    }
-    setRows((current) => {
-      const next = current.filter((row) => row.serial !== body.equipment!.serial);
-      return [...next, body.equipment!].sort((a, b) => a.site_id.localeCompare(b.site_id) || a.site_seq - b.site_seq);
-    });
-    load(body.equipment);
-    setMessage("Guardado.");
+  }, [rows, next, today, view, site, status, category, clientFilter, query]);
+
+  const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const currentPage = Math.min(page, pageCount);
+
+  const nextSeqBySite = React.useMemo(() => {
+    const max: Record<string, number> = {};
+    for (const row of rows) max[row.site_id] = Math.max(max[row.site_id] ?? 0, row.site_seq);
+    return max;
+  }, [rows]);
+
+  const hasFilters = Boolean(query || site || status || category || clientFilter !== "all" || view);
+
+  function viewHref(target: View): string {
+    return view === target || !target ? pathname : `${pathname}?vista=${target}`;
   }
 
-  async function addToList(kind: "category" | "client" | "supplier" | "city", value: string) {
+  function clearFilters() {
+    setQuery("");
+    setSite("");
+    setStatus("");
+    setCategory("");
+    setClientFilter("all");
+    if (view) router.replace(pathname);
+  }
+
+  function toggleSort(key: SortKey) {
+    setSort((current) => (current.key === key ? { key, dir: current.dir === "asc" ? "desc" : "asc" } : { key, dir: "asc" }));
+  }
+
+  function closeEditor() {
+    setEditor(null);
+    if (params.get("nuevo") || params.get("editar")) router.replace(viewHref(view));
+  }
+
+  function handleSaved(row: EquipmentRow, nextDate: string | null, created: boolean) {
+    setRows((current) => [...current.filter((item) => item.serial !== row.serial), row]);
+    setNext((current) => ({ ...current, [row.serial]: nextDate }));
+    closeEditor();
+    toast({ title: created ? "Equipo creado" : "Equipo guardado", description: `${row.store_code} · ${row.name}` });
+  }
+
+  /** Agrega un valor a una lista fija (categoría, cliente, proveedor o ciudad). Devuelve si quedó guardado. */
+  async function addToList(kind: CatalogKind, value: string): Promise<boolean> {
     const trimmed = value.trim();
-    if (!trimmed) return;
-    await fetch("/api/comodatos", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ catalogKind: kind, catalogValue: trimmed }) });
-    setCatalogs((current) => ({ ...current, [`${kind === "category" ? "categories" : kind === "client" ? "clients" : kind === "supplier" ? "suppliers" : "cities"}`]: [...new Set([...current[kind === "category" ? "categories" : kind === "client" ? "clients" : kind === "supplier" ? "suppliers" : "cities"], trimmed])].sort() }));
+    if (!trimmed) return false;
+    try {
+      const response = await fetch("/api/comodatos", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ catalogKind: kind, catalogValue: trimmed }),
+      });
+      const body = (await response.json()) as { values?: string[]; error?: string };
+      if (!response.ok) {
+        toast({ tone: "danger", title: "No se pudo agregar", description: body.error ?? "Inténtalo de nuevo." });
+        return false;
+      }
+      const listKey = CATALOG_KINDS.find((item) => item.kind === kind)!.listKey;
+      setCatalogs((current) => ({ ...current, [listKey]: body.values ?? [...new Set([...current[listKey], trimmed])] }));
+      toast({ title: "Agregado a la lista", description: trimmed });
+      return true;
+    } catch {
+      toast({ tone: "danger", title: "Sin conexión", description: "No se pudo hablar con el servidor." });
+      return false;
+    }
   }
 
-  async function showSync() {
-    const response = await fetch("/api/comodatos?view=sync");
-    const plan = await response.json();
-    const lines = [
-      `Modo: ${plan.mode}. No se escribió nada en la hoja.`,
-      `Actualizaciones: ${plan.push.updates.length}`,
-      `Altas: ${plan.push.inserts.length}`,
-      `Bajas: ${plan.push.deletes.length} (el adaptador no borra filas)`,
-      ...plan.push.updates.slice(0, 8).flatMap((update: { serial: string; rowNumber: number; changes: { column: string; from: string; to: string }[] }) =>
-        update.changes.map((change) => `${update.serial} · fila ${update.rowNumber} encontrada por serial · ${change.column}: "${change.from}" → "${change.to}"`),
-      ),
-    ];
-    setSync(lines.join("\n"));
-  }
-
-  async function copySync() {
-    if (!sync) return;
-    await navigator.clipboard.writeText(sync);
-    setMessage("Diff copiado. Nada se escribió en la hoja.");
-  }
-
-  const warrantyFallback = ((rows.find((row) => row.serial === selected)?.warranty_state as WarrantyState | undefined) ?? "desconocida");
+  const editingRow = editor?.mode === "edit" ? rows.find((row) => row.serial === editor.serial) : undefined;
+  const sheetOpen = editor?.mode === "create" || Boolean(editingRow);
+  const sheetKey = editor ? (editor.mode === "create" ? "create" : editor.serial) : "closed";
 
   return (
-    <main className="mx-auto grid max-w-[1280px] gap-4 px-4 py-5 lg:grid-cols-[minmax(0,1fr)_400px]">
-      <section>
-        <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
-          <div>
-            <p className="text-xs tracking-[0.16em] text-[#98a2b3]">COMODATOS</p>
-            <h1 className="font-serif text-4xl">Equipos</h1>
-            <p className="text-sm text-[#667085]">{rows.length} equipos · el serial es la clave</p>
-          </div>
-          <button className="rounded-full bg-[var(--blue)] px-4 py-2 text-sm text-white" onClick={startNew}>Nuevo equipo</button>
-        </div>
-        <div className="mb-3 flex flex-wrap gap-2">
-          <input className="h-10 flex-1 rounded-xl border bg-white px-3 text-sm" placeholder="Serial, equipo o cliente" value={query} onChange={(event) => setQuery(event.target.value)} />
-          <select className="h-10 rounded-xl border bg-white px-3 text-sm" value={site} onChange={(event) => setSite(event.target.value)}>
+    <div className="page">
+      <PageHeader
+        eyebrow="Comercial"
+        title="Equipos"
+        description={`${counts.total} equipos en tiendas y en comodato. El serial identifica cada uno.`}
+        actions={
+          <>
+            <Button onClick={() => setEditor({ mode: "create" })}>
+              <Plus /> Nuevo equipo
+            </Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="secondary" size="icon" aria-label="Más acciones">
+                  <Ellipsis />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent>
+                <DropdownMenuItem onSelect={() => setSettingsOpen(true)}>
+                  <Settings /> Configuración
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => setDiffOpen(true)}>
+                  <FileSpreadsheet /> Comparar con la hoja de Google
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </>
+        }
+      >
+        <Toolbar>
+          <SearchInput value={query} onChange={setQuery} placeholder="Serial, nombre, código o cliente" className="w-full sm:w-72" aria-label="Buscar equipo" />
+          <Select value={site} onChange={(event) => setSite(event.target.value)} aria-label="Sede" className="w-full sm:w-44">
             <option value="">Todas las sedes</option>
-            {SITES.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
-          </select>
-          <select className="h-10 rounded-xl border bg-white px-3 text-sm" value={status} onChange={(event) => setStatus(event.target.value)}>
+            {SITES.map((item) => (
+              <option key={item.id} value={item.id}>
+                {item.name}
+              </option>
+            ))}
+          </Select>
+          <Select value={status} onChange={(event) => setStatus(event.target.value)} aria-label="Estado" className="w-full sm:w-44">
             <option value="">Todos los estados</option>
-            {COMODATO_STATUSES.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
-          </select>
-        </div>
-        <div className="overflow-hidden rounded-3xl bg-white shadow-sm">
-          <table className="w-full text-left text-sm">
-            <thead className="text-xs text-[#98a2b3]">
-              <tr><th className="px-3 py-2">Código</th><th>Equipo</th><th>Sede</th><th>Cliente</th><th>Estado</th></tr>
-            </thead>
-            <tbody>
-              {filtered.slice(0, 80).map((row) => (
-                <tr key={row.serial} onClick={() => load(row)} className={`cursor-pointer border-t border-[#f2f4f7] ${selected === row.serial ? "bg-[#f4f7ff]" : "hover:bg-[#fafbfe]"}`}>
-                  <td className="px-3 py-2 font-medium">{row.store_code}</td>
-                  <td>{row.name}<span className="block text-xs text-[#98a2b3]">{row.serial}</span></td>
-                  <td>{siteById(row.site_id)?.name ?? row.site_id}</td>
-                  <td>{row.client_name || "—"}</td>
-                  <td>{statusLabel(row.status)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          {filtered.length > 80 && <p className="px-3 py-2 text-xs text-[#98a2b3]">Mostrando 80 de {filtered.length}. Afina la búsqueda.</p>}
-        </div>
-        <section className="mt-4 rounded-3xl bg-white p-4 text-sm shadow-sm">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <h2 className="font-semibold">Google Sheets</h2>
-            <div className="flex gap-2">
-              <button className="rounded-full border px-3 py-1" onClick={() => void showSync()}>Ver diff</button>
-              {sync && <button className="rounded-full border px-3 py-1" onClick={() => void copySync()}>Copiar</button>}
-            </div>
-          </div>
-          <p className="mt-1 text-[#667085]">Sincronización apagada. El diff muestra qué celdas se escribirían, buscando cada fila por serial. No borra filas y no toca las columnas de fórmula.</p>
-          {sync && <pre className="mt-2 whitespace-pre-wrap rounded-xl bg-[#f6f7fb] p-3 text-xs">{sync}</pre>}
-        </section>
-      </section>
+            {COMODATO_STATUSES.map((item) => (
+              <option key={item.id} value={item.id}>
+                {item.label}
+              </option>
+            ))}
+          </Select>
+          <Select value={category} onChange={(event) => setCategory(event.target.value)} aria-label="Categoría" className="w-full sm:w-48">
+            <option value="">Todas las categorías</option>
+            {catalogs.categories.map((item) => (
+              <option key={item} value={item}>
+                {item}
+              </option>
+            ))}
+          </Select>
+          <Segmented<ClientFilter>
+            size="sm"
+            ariaLabel="Filtrar por cliente"
+            value={clientFilter}
+            onChange={setClientFilter}
+            options={[
+              { value: "all", label: "Todos" },
+              { value: "with", label: "Con cliente" },
+              { value: "without", label: "Sin cliente" },
+            ]}
+          />
+          {hasFilters && (
+            <Button variant="ghost" size="sm" onClick={clearFilters}>
+              <FunnelX /> Limpiar filtros
+            </Button>
+          )}
+          <span className="num ml-auto text-xs text-ink-3" aria-live="polite">
+            Mostrando {filtered.length} de {rows.length}
+          </span>
+        </Toolbar>
+      </PageHeader>
 
-      <form className="h-max space-y-3 rounded-3xl bg-white p-4 shadow-sm lg:sticky lg:top-20" onSubmit={(event) => { event.preventDefault(); void save(); }}>
-        <div className="flex items-center justify-between">
-          <h2 className="font-semibold">{creating ? "Nuevo equipo" : "Editar"}</h2>
-          {!creating && selected && <Link className="text-sm text-[var(--blue)]" href={`/comodatos/${encodeURIComponent(selected)}`}>Hoja de vida</Link>}
-        </div>
-        <Field label="Serial">
-          <input ref={serialRef} required className={fieldClass} value={form.serial} disabled={!creating} onChange={(event) => setForm({ ...form, serial: event.target.value })} />
-        </Field>
-        <Field label="Nombre">
-          <input required className={fieldClass} value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} />
-        </Field>
-        <Field label="Categoría">
-          <select required className={fieldClass} value={form.category} onChange={(event) => setForm({ ...form, category: event.target.value })}>
-            <option value="">Elegir</option>
-            {catalogs.categories.map((item) => <option key={item}>{item}</option>)}
-          </select>
-        </Field>
-        <Field label="Sede">
-          <select className={fieldClass} value={form.siteId} onChange={(event) => setForm({ ...form, siteId: event.target.value })}>
-            {SITES.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
-          </select>
-        </Field>
-        <p className="rounded-2xl bg-[#f6f7fb] px-3 py-2 text-sm">Código tienda <strong>{previewCode}</strong><span className="block text-xs text-[#667085]">{creating ? "El activo general se asigna al guardar." : rows.find((row) => row.serial === selected)?.asset_number}</span></p>
-        <Field label="Estado">
-          <select className={fieldClass} value={form.status} onChange={(event) => setForm({ ...form, status: event.target.value })}>
-            {COMODATO_STATUSES.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
-          </select>
-        </Field>
-        <Field label="Cliente">
-          <select className={fieldClass} value={form.clientName} onChange={(event) => setForm({ ...form, clientName: event.target.value, status: event.target.value ? "en_comodato" : form.status })}>
-            <option value="">Sin cliente</option>
-            {catalogs.clients.map((item) => <option key={item}>{item}</option>)}
-          </select>
-        </Field>
-        <Field label="Dirección"><input className={fieldClass} value={form.address} onChange={(event) => setForm({ ...form, address: event.target.value })} /></Field>
-        <Field label="Ciudad">
-          <select className={fieldClass} value={form.city} onChange={(event) => setForm({ ...form, city: event.target.value })}>
-            <option value="">Sin ciudad</option>
-            {catalogs.cities.map((item) => <option key={item}>{item}</option>)}
-          </select>
-        </Field>
-        <Field label="Entrega"><input className={fieldClass} type="date" value={form.deliveredOn} onChange={(event) => setForm({ ...form, deliveredOn: event.target.value })} /></Field>
-        <Field label="Vendedor">
-          <select className={fieldClass} value={form.salesperson} onChange={(event) => setForm({ ...form, salesperson: event.target.value })}>
-            <option value="">Sin vendedor</option>
-            {catalogs.salespeople.map((item) => <option key={item}>{item}</option>)}
-          </select>
-        </Field>
-        <Field label="Proveedor">
-          <select className={fieldClass} value={form.supplier} onChange={(event) => setForm({ ...form, supplier: event.target.value })}>
-            <option value="">Sin proveedor</option>
-            {catalogs.suppliers.map((item) => <option key={item}>{item}</option>)}
-          </select>
-        </Field>
-        <Field label="Referencia proveedor"><input className={fieldClass} value={form.supplierReference} onChange={(event) => setForm({ ...form, supplierReference: event.target.value })} /></Field>
-        <Field label="Modelo"><input className={fieldClass} value={form.model} onChange={(event) => setForm({ ...form, model: event.target.value })} /></Field>
-        <Field label="Garantía hasta">
-          <input className={fieldClass} type="date" value={form.warrantyUntil} onChange={(event) => setForm({ ...form, warrantyUntil: event.target.value })} />
-        </Field>
-        <p className="text-xs text-[#667085]">Estado de garantía: {warrantyStateOn(form.warrantyUntil || null, form.warrantyUntil ? "vigente" : warrantyFallback, todayIso())}</p>
-        <div className="grid grid-cols-3 gap-2">
-          <Field label="Cada (días)"><input className={fieldClass} value={form.everyDays} onChange={(event) => setForm({ ...form, everyDays: event.target.value })} /></Field>
-          <Field label="Horas mín"><input className={fieldClass} value={form.hoursMin} onChange={(event) => setForm({ ...form, hoursMin: event.target.value })} /></Field>
-          <Field label="Horas máx"><input className={fieldClass} value={form.hoursMax} onChange={(event) => setForm({ ...form, hoursMax: event.target.value })} /></Field>
-        </div>
-        <p className="text-sm">Costo anual estimado <strong>{cost ? cop(cost.annualCost) : "—"}</strong> <span className="text-xs text-[#98a2b3]">con tarifa {cop(rate)}/hora</span></p>
-        <label className="block text-xs text-[#667085]">Tarifa hora
-          <input className={fieldClass} type="number" value={rate} onChange={async (event) => {
-            const value = Number(event.target.value);
-            setRate(value);
-            await fetch("/api/comodatos", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ hourlyRate: value }) });
-          }} />
-        </label>
-        <ListAdder label="Agregar categoría" onAdd={(value) => void addToList("category", value)} />
-        <ListAdder label="Agregar cliente" onAdd={(value) => void addToList("client", value)} />
-        <Field label="Notas"><textarea className={fieldClass} rows={2} value={form.notes} onChange={(event) => setForm({ ...form, notes: event.target.value })} /></Field>
-        {message && <p className="text-sm text-emerald-700">{message}</p>}
-        <button className="w-full rounded-full bg-[var(--navy)] py-2.5 text-sm text-white">Guardar equipo</button>
-      </form>
-    </main>
-  );
-}
+      <StatGrid className="mb-5">
+        <Stat label="Total" value={counts.total} hint="Equipos registrados" href={viewHref("")} className={cn(!view && "border-navy")} />
+        <Stat label="En comodato" value={counts.comodato} tone="info" hint="Entregados a clientes" href={viewHref("comodato")} className={cn(view === "comodato" && "border-navy ring-2 ring-navy/15")} />
+        <Stat label="En tienda" value={counts.tienda} hint="Operando en sedes" href={viewHref("tienda")} className={cn(view === "tienda" && "border-navy ring-2 ring-navy/15")} />
+        <Stat label="Garantía vencida" value={counts.warranty} tone="danger" hint="Según fecha o la hoja" href={viewHref("garantia")} className={cn(view === "garantia" && "border-navy ring-2 ring-navy/15")} />
+        <Stat
+          label="Mantenimiento vencido"
+          value={counts.maintenance}
+          tone="warn"
+          hint="Vencido o sin fecha base"
+          href={viewHref("mantenimiento")}
+          className={cn(view === "mantenimiento" && "border-navy ring-2 ring-navy/15")}
+        />
+      </StatGrid>
 
-function Field({ label, children }: { label: string; children: ReactNode }) {
-  return <label className="block text-xs text-[#667085]">{label}<div className="mt-1">{children}</div></label>;
-}
+      <EquipmentTable
+        rows={filtered}
+        next={next}
+        today={today}
+        sort={sort}
+        onSort={toggleSort}
+        page={currentPage}
+        pageSize={PAGE_SIZE}
+        pageCount={pageCount}
+        onPageChange={setPage}
+        onOpen={(serial) => setEditor({ mode: "edit", serial })}
+        hasFilters={hasFilters}
+        onClearFilters={clearFilters}
+        onCreate={() => setEditor({ mode: "create" })}
+      />
 
-function ListAdder({ label, onAdd }: { label: string; onAdd: (value: string) => void }) {
-  const [value, setValue] = useState("");
-  return (
-    <div className="flex gap-2">
-      <input className={fieldClass} placeholder={label} value={value} onChange={(event) => setValue(event.target.value)} />
-      <button type="button" className="rounded-xl border px-3 text-xs" onClick={() => { onAdd(value); setValue(""); }}>Añadir</button>
+      <EquipmentSheet
+        key={sheetKey}
+        open={sheetOpen}
+        onOpenChange={(open) => !open && closeEditor()}
+        mode={editor?.mode === "create" ? "create" : "edit"}
+        row={editingRow}
+        lists={catalogs}
+        rate={rate}
+        today={today}
+        nextSeqBySite={nextSeqBySite}
+        onSaved={handleSaved}
+        onAddToList={addToList}
+      />
+
+      <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} rate={rate} onRateSaved={setRate} lists={catalogs} onAddToList={addToList} />
+
+      <SheetDiffDialog open={diffOpen} onOpenChange={setDiffOpen} />
     </div>
   );
 }

@@ -1,5 +1,18 @@
 import { clsx, type ClassValue } from "clsx";
-import { twMerge } from "tailwind-merge";
+import { extendTailwindMerge } from "tailwind-merge";
+
+// Colores de marca definidos en app/globals.css. Sin esta lista, tailwind-merge no sabe que
+// `text-crema` es un color y lo descarta al combinarlo con un tamaño como `text-sm`.
+const BRAND_COLORS = [
+  "navy", "navy-2", "navy-deep", "crema", "crema-2", "gris", "amarillo",
+  "bg", "bg-2", "surface", "surface-2", "ink", "ink-2", "ink-3", "line", "line-2",
+  "accent", "accent-2", "accent-ink", "accent-soft", "hl", "hl-ink",
+  "ok", "ok-soft", "warn", "warn-soft", "danger", "danger-soft", "info", "info-soft",
+];
+
+const twMerge = extendTailwindMerge({
+  extend: { theme: { color: BRAND_COLORS, shadow: ["card", "pop"] } },
+});
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));

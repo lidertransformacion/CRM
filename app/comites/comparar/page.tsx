@@ -1,74 +1,138 @@
 import Link from "next/link";
+import { ArrowLeft, GitCompare } from "lucide-react";
 import { compareCommittees } from "@/lib/db";
-import { shortDate } from "@/lib/utils";
+import type { DiffRow } from "@/lib/committee/compare";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardBody, CardHeader } from "@/components/ui/card";
+import { EmptyState } from "@/components/ui/empty-state";
+import { PageHeader, Toolbar } from "@/components/ui/page-header";
+import { Stat, StatGrid } from "@/components/ui/stat";
+import { longDate, shortDate } from "@/lib/utils";
+import { CompareControls } from "@/components/committee/CompareControls";
+import { plural } from "@/components/committee/helpers";
 
 export const dynamic = "force-dynamic";
 
-export default async function ComparePage({ searchParams }: { searchParams: Promise<{ left?: string; right?: string }> }) {
+type Params = { left?: string; right?: string };
+
+export default async function ComparePage({ searchParams }: { searchParams: Promise<Params> }) {
   const params = await searchParams;
-  const data = await compareCommittees(Number(params.left || 1), Number(params.right || 7));
+  let data = await compareCommittees(Number(params.left) || 0, Number(params.right) || 0);
+  const first = data.available[0]?.number ?? 1;
+  const last = data.available.at(-1)?.number ?? first;
+  const left = Number(params.left) || first;
+  const right = Number(params.right) || last;
+  if (!params.left || !params.right) data = await compareCommittees(left, right);
+
+  const latest = Math.max(last, ...data.cohorts.map((cohort) => cohort.number));
+  const leftRow = data.available.find((item) => item.number === left);
+  const rightRow = data.available.find((item) => item.number === right);
+
   return (
-    <main className="mx-auto max-w-5xl space-y-6 px-4 py-6">
-      <div className="flex items-end justify-between gap-3">
-        <div>
-          <p className="text-xs tracking-[0.16em] text-[#98a2b3]">COMITÉS</p>
-          <h1 className="font-serif text-4xl">Comparar</h1>
-        </div>
-        <Link href="/comites" className="text-sm text-[var(--blue)]">Volver al tablero</Link>
-      </div>
-      <form className="flex flex-wrap gap-3 rounded-3xl bg-white p-4 shadow-sm">
-        <label className="text-sm">Desde
-          <select name="left" defaultValue={params.left || "1"} className="mt-1 block rounded-xl border px-3 py-2">
-            {data.available.map((item) => <option key={item.number} value={item.number}>#{item.number} · {shortDate(item.heldOn)}</option>)}
-          </select>
-        </label>
-        <label className="text-sm">Hasta
-          <select name="right" defaultValue={params.right || "7"} className="mt-1 block rounded-xl border px-3 py-2">
-            {data.available.map((item) => <option key={item.number} value={item.number}>#{item.number} · {shortDate(item.heldOn)}</option>)}
-          </select>
-        </label>
-        <button className="self-end rounded-full bg-[var(--navy)] px-4 py-2 text-sm text-white">Ver</button>
-      </form>
-      <section className="rounded-3xl bg-white p-5 shadow-sm">
-        <h2 className="font-semibold">Cohortes de nacimiento</h2>
-        <p className="mb-3 text-sm text-[#667085]">Cuántos pendientes nacieron en cada fecha y cuántos siguen abiertos en el tablero más reciente.</p>
-        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
-          {data.cohorts.map((cohort) => (
-            <div key={cohort.number} className="rounded-2xl border border-[#eef0f5] p-3">
-              <p className="text-xs text-[#98a2b3]">#{cohort.number} · {shortDate(cohort.heldOn)}</p>
-              <p className="mt-1 text-2xl font-semibold">{cohort.stillOpen}</p>
-              <p className="text-xs text-[#667085]">{cohort.born} nacieron · {cohort.closed} cerrados</p>
-            </div>
-          ))}
-        </div>
+    <div className="page">
+      <PageHeader
+        eyebrow="Comités"
+        title="Comparar comités"
+        description="Cuántos pendientes nacieron en cada comité y qué cambió entre dos actas archivadas."
+        actions={
+          <Button asChild variant="secondary">
+            <Link href="/comites">
+              <ArrowLeft /> Volver al tablero
+            </Link>
+          </Button>
+        }
+      >
+        <Toolbar>
+          {data.available.length > 0 ? <CompareControls available={data.available} left={left} right={right} /> : <p className="text-sm text-ink-3">Todavía no hay actas archivadas para comparar.</p>}
+        </Toolbar>
+      </PageHeader>
+
+      <section className="mb-6" aria-labelledby="cohortes">
+        <h2 id="cohortes" className="mb-1 font-sans text-[15px] font-semibold text-ink">Cohortes de nacimiento</h2>
+        <p className="mb-3 text-xs text-ink-3">Por cada comité: cuántos pendientes nacieron ese día y cuántos siguen abiertos en el acta más reciente (#{latest}). Clic para ver la cohorte.</p>
+        <StatGrid className="md:grid-cols-4 xl:grid-cols-7">
+          {data.cohorts.map((cohort) => {
+            const carry = latest - cohort.number;
+            const tone = cohort.stillOpen === 0 ? (cohort.born > 0 ? "ok" : "neutral") : carry >= 2 ? "danger" : carry === 1 ? "warn" : "neutral";
+            return (
+              <Stat
+                key={cohort.number}
+                label={`Comité #${cohort.number} · ${shortDate(cohort.heldOn)}`}
+                value={cohort.stillOpen}
+                hint={`${plural(cohort.born, "nació", "nacieron")} · ${cohort.closed} cerrados`}
+                tone={tone}
+                href={cohort.number === latest ? "/comites" : `/comites?comite=${cohort.number}`}
+              />
+            );
+          })}
+        </StatGrid>
       </section>
+
       {data.diff ? (
-        <section className="grid gap-4 md:grid-cols-3">
-          <DiffColumn title="Se cerraron o salieron" rows={data.diff.closedBetween} />
-          <DiffColumn title="Siguen abiertos" rows={data.diff.stillOpen} />
-          <DiffColumn title="Entraron después" rows={data.diff.added} />
+        <section aria-labelledby="diff">
+          <h2 id="diff" className="mb-1 font-sans text-[15px] font-semibold text-ink">
+            Qué cambió entre el comité #{left} y el #{right}
+          </h2>
+          <p className="mb-3 text-xs text-ink-3">
+            {leftRow && rightRow ? `Del ${longDate(leftRow.heldOn)} al ${longDate(rightRow.heldOn)}.` : ""} Cada pendiente se sigue por su identificador, aunque cambie de título.
+          </p>
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+            <DiffColumn title="Se cerraron o salieron" description="Estaban en la primera acta y ya no están abiertos en la segunda." tone="ok" rows={data.diff.closedBetween} />
+            <DiffColumn title="Siguen abiertos" description="Aparecen en las dos actas sin cerrarse." tone="danger" rows={data.diff.stillOpen} />
+            <DiffColumn title="Entraron después" description="Nuevos en la segunda acta." tone="info" rows={data.diff.added} />
+          </div>
         </section>
       ) : (
-        <p className="rounded-2xl bg-white p-4 text-sm text-[#667085]">El diff de actas aparece cuando los dos comités tienen snapshot. Las fechas anteriores al #7 son cohortes.</p>
+        <Card>
+          <EmptyState
+            icon={<GitCompare />}
+            title="No hay dos actas archivadas para comparar"
+            description="El diff aparece cuando los dos comités elegidos tienen acta guardada. Los comités 1 a 6 son cohortes dentro del acta actual; al crear un comité nuevo, el actual queda archivado y ya se puede comparar."
+            action={
+              <Button asChild variant="secondary">
+                <Link href="/comites">Ir al tablero</Link>
+              </Button>
+            }
+          />
+        </Card>
       )}
-    </main>
+    </div>
   );
 }
 
-function DiffColumn({ title, rows }: { title: string; rows: { id: string; title: string; topic: string; change: string }[] }) {
+function changeTone(change: string): "ok" | "danger" | "warn" | "info" | "neutral" {
+  if (change.startsWith("Se cerró")) return "ok";
+  if (change.startsWith("Nuevo")) return "info";
+  if (change.startsWith("Sigue abierto")) {
+    const carry = Number(change.match(/(\d+) comités/)?.[1] ?? 0);
+    return carry >= 2 ? "danger" : carry === 1 ? "warn" : "neutral";
+  }
+  return "neutral";
+}
+
+function DiffColumn({ title, description, tone, rows }: { title: string; description: string; tone: "ok" | "danger" | "info"; rows: DiffRow[] }) {
   return (
-    <div className="rounded-3xl bg-white p-4 shadow-sm">
-      <h3 className="font-semibold">{title}</h3>
-      <p className="mb-2 text-xs text-[#98a2b3]">{rows.length}</p>
-      <div className="space-y-2">
-        {rows.slice(0, 12).map((row) => (
-          <div key={row.id} className="text-sm">
-            <p className="font-medium">{row.title}</p>
-            <p className="text-xs text-[#667085]">{row.topic} · {row.change}</p>
-          </div>
-        ))}
-        {rows.length > 12 && <p className="text-xs text-[#98a2b3]">y {rows.length - 12} más</p>}
-      </div>
-    </div>
+    <Card className="min-w-0">
+      <CardHeader title={title} description={description} actions={<Badge tone={rows.length ? tone : "neutral"}>{plural(rows.length, "pendiente", "pendientes")}</Badge>} />
+      <CardBody className="max-h-[520px] overflow-auto">
+        {rows.length === 0 ? (
+          <p className="py-2 text-xs text-ink-3">Ninguno.</p>
+        ) : (
+          <ul className="divide-y divide-line-2">
+            {rows.map((row) => (
+              <li key={row.id} className="space-y-1 py-2.5 text-sm">
+                <p className="font-medium text-ink">{row.title}</p>
+                <p className="truncate text-xs text-ink-3">
+                  {row.topic}
+                  {row.punto ? ` · ${row.punto}` : ""}
+                </p>
+                <Badge tone={changeTone(row.change)} size="sm">{row.change}</Badge>
+              </li>
+            ))}
+          </ul>
+        )}
+      </CardBody>
+    </Card>
   );
 }

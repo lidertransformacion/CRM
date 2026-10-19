@@ -1,18 +1,28 @@
+import type { Metadata } from "next";
 import { Drafts } from "@/components/emails/Drafts";
-import { getDb } from "@/lib/db";
-import type { EmailTemplate } from "@/lib/emails/templates";
+import { findLeadByKey, listEmailTemplates } from "@/lib/emails/queries";
 
 export const dynamic = "force-dynamic";
+export const metadata: Metadata = { title: "Correos" };
 
-export default async function CorreosPage() {
-  const db = await getDb();
-  const templates = await db.all<{
-    id: string;
-    name: string;
-    subject: string;
-    body: string;
-    sort_order: number;
-  }>("SELECT id, name, subject, body, sort_order FROM email_templates ORDER BY sort_order");
-  const mapped: EmailTemplate[] = templates.map((template) => ({ ...template, sortOrder: template.sort_order }));
-  return <Drafts templates={mapped} />;
+type SearchParams = Promise<Record<string, string | string[] | undefined>>;
+
+function first(value: string | string[] | undefined): string | null {
+  const raw = Array.isArray(value) ? value[0] : value;
+  const trimmed = raw?.trim();
+  return trimmed ? trimmed : null;
+}
+
+/**
+ * Deep links: `?lead=<import_key>` preselecciona la oportunidad y `?plantilla=<id>` la plantilla.
+ * La oportunidad se resuelve aquí, en el servidor, para que el borrador salga armado desde el primer render.
+ */
+export default async function CorreosPage({ searchParams }: { searchParams: SearchParams }) {
+  const params = await searchParams;
+  const templates = await listEmailTemplates();
+  const leadKey = first(params.lead);
+  const lead = leadKey ? await findLeadByKey(leadKey) : null;
+  const templateParam = first(params.plantilla);
+  const templateId = templateParam && templates.some((template) => template.id === templateParam) ? templateParam : null;
+  return <Drafts templates={templates} initialTemplateId={templateId} initialLead={lead} missingLeadKey={leadKey && !lead ? leadKey : null} />;
 }
