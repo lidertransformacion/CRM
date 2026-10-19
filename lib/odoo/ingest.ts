@@ -89,12 +89,27 @@ export type IngestAmbiguous = {
 };
 
 /** Dry-run (and live) picture of the first link pass. */
+export type IngestPossibleDuplicate = {
+  odooId: string;
+  name: string;
+  customer: string;
+  linked: IngestMatchRef;
+  duplicates: IngestMatchRef[];
+};
+
+export type IngestMissingLinked = { importKey: string; odooId: string; name: string; customer: string };
+
 export type IngestSummary = {
   linked: number;
   ambiguousCount: number;
   unlinkedCount: number;
+  possibleDuplicateCount: number;
+  /** Previously linked rows whose Odoo id is absent from this full snapshot. */
+  missingLinkedCount: number;
   ambiguous: IngestAmbiguous[];
+  possibleDuplicates: IngestPossibleDuplicate[];
   unlinked: IngestMatchRef[];
+  missingLinked: IngestMissingLinked[];
 };
 
 export type CommitRequest = {
@@ -108,6 +123,8 @@ export type CommitResult = {
   seen: number;
   archived: number;
   wouldArchive: number;
+  /** Rows that already had an Odoo id and are missing from this snapshot. */
+  missingLinkedCount: number;
 };
 
 type StoredLead = {
@@ -132,13 +149,14 @@ type StoredLead = {
 
 type LeadOutcome = { action: "inserted" | "updated" | "linked"; importKey: string };
 
-type MatchMeta = { nameKey: string; nits: string[]; emails: string[] };
+type MatchMeta = { nameKey: string; bareName: string; nits: string[]; emails: string[] };
 
 type LeadIndex = {
   rows: StoredLead[];
   byOdoo: Map<string, StoredLead>;
   byKey: Map<string, StoredLead>;
   byName: Map<string, StoredLead[]>;
+  byBareName: Map<string, StoredLead[]>;
   byNit: Map<string, StoredLead[]>;
   byEmail: Map<string, StoredLead[]>;
   meta: Map<string, MatchMeta>;
@@ -216,7 +234,17 @@ function emailForms(value: string): string[] {
 }
 
 function emptySummary(): IngestSummary {
-  return { linked: 0, ambiguousCount: 0, unlinkedCount: 0, ambiguous: [], unlinked: [] };
+  return {
+    linked: 0,
+    ambiguousCount: 0,
+    unlinkedCount: 0,
+    possibleDuplicateCount: 0,
+    missingLinkedCount: 0,
+    ambiguous: [],
+    possibleDuplicates: [],
+    unlinked: [],
+    missingLinked: [],
+  };
 }
 
 function emptyResult(mode: "full" | "incremental", snapshotId: string, dryRun: boolean): IngestResult {
@@ -250,6 +278,7 @@ export async function ingestSnapshot(db: SqlDb, body: IngestRequest): Promise<In
   const kept = new Set<string>();
   const statements: SqlBatch[] = [];
   const index = indexLeads(await db.all<StoredLead>(LEAD_SQL));
+  const nameCounts = incomingNameCounts(leads);
 
   for (const raw of leads) {
     const odooId = raw?.id == null ? "" : String(raw.id).trim();
@@ -258,7 +287,7 @@ export async function ingestSnapshot(db: SqlDb, body: IngestRequest): Promise<In
       continue;
     }
     try {
-      const outcome = planLead(index, odooId, raw, result, statements, dryRun);
+      const outcome = planLead(index, odooId, raw, result, statements, dryRun, kept, nameCounts);
       seen.add(odooId);
       kept.add(outcome.importKey);
       if (outcome.action === "inserted") result.wouldInsert += 1;
@@ -279,8 +308,9 @@ export async function ingestSnapshot(db: SqlDb, body: IngestRequest): Promise<In
     }
   }
 
-  if (mode === "full" && (dryRun || !snapshotId)) planArchive(index.rows, seen, kept, result, statements, dryRun);
-  fillSummary(result, index);
+  const archiveNow = mode === "full" && (dryRun || !snapshotId);
+  if (archiveNow) planArchive(index.rows, seen, kept, result, statements, dryRun);
+  fillSummary(result, index, seen, kept, archiveNow);
   if (!dryRun) {
     const now = new Date().toISOString();
     statements.push(
@@ -322,7 +352,7 @@ export async function commitSnapshot(db: SqlDb, body: CommitRequest): Promise<Co
     );
     await writeChunks(db, statements);
   }
-  return { snapshotId, dryRun, seen: seen.size, archived: result.archived, wouldArchive: result.wouldArchive };
+  return { snapshotId, dryRun, seen: seen.size, archived: result.archived, wouldArchive: result.wouldArchive, missingLinkedCount: result.wouldArchive };
 }
 
 function indexLeads(rows: StoredLead[]): LeadIndex {
@@ -331,6 +361,7 @@ function indexLeads(rows: StoredLead[]): LeadIndex {
     byOdoo: new Map(),
     byKey: new Map(),
     byName: new Map(),
+    byBareName: new Map(),
     byNit: new Map(),
     byEmail: new Map(),
     meta: new Map(),
@@ -346,9 +377,10 @@ function indexLeads(rows: StoredLead[]): LeadIndex {
     const customer = normalizeLabel(row.customer ?? "");
     const nameKey = name && customer ? `${name}|${customer}` : "";
     const blob = `${row.name} ${row.customer ?? ""} ${row.tags ?? ""}`;
-    const meta = { nameKey, nits: labeledNits(blob), emails: emailForms(blob) };
+    const meta = { nameKey, bareName: name, nits: labeledNits(blob), emails: emailForms(blob) };
     index.meta.set(row.import_key, meta);
     if (nameKey) pushMap(index.byName, nameKey, row);
+    if (name) pushMap(index.byBareName, name, row);
     for (const nit of meta.nits) pushMap(index.byNit, nit, row);
     for (const email of meta.emails) pushMap(index.byEmail, email, row);
   }
@@ -374,6 +406,16 @@ function rowsFor(map: Map<string, StoredLead[]>, keys: string[]): StoredLead[] {
   return rows;
 }
 
+function incomingNameCounts(leads: IngestLead[]): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const raw of leads) {
+    const name = normalizeLabel(text(raw?.name));
+    if (!name) continue;
+    counts.set(name, (counts.get(name) ?? 0) + 1);
+  }
+  return counts;
+}
+
 function incomingSignals(raw: IngestLead) {
   const customerText = text(raw.customer ?? raw.partner ?? raw.partner_name);
   const name = normalizeLabel(text(raw.name));
@@ -382,10 +424,43 @@ function incomingSignals(raw: IngestLead) {
   const nits = new Set<string>(nitValues.flatMap((value) => explicitNits(value)));
   for (const nit of labeledNits(`${text(raw.name)} ${customerText}`)) nits.add(nit);
   const emails = emailForms([raw.email, raw.email_from, raw.partner_email, raw.name, customerText].map((value) => text(value)).join(" "));
-  return { nameKey: name && customer ? `${name}|${customer}` : "", nits: [...nits], emails, customer: customerText };
+  return { nameKey: name && customer ? `${name}|${customer}` : "", bareName: name, nits: [...nits], emails, customer: customerText };
 }
 
-function matchUnlinked(index: LeadIndex, raw: IngestLead): { row?: StoredLead; ambiguous: StoredLead[] } {
+function filledScore(row: StoredLead): number {
+  let score = 0;
+  if (text(row.customer)) score += 1;
+  if (text(row.salesperson)) score += 1;
+  if (text(row.team)) score += 1;
+  if (text(row.tags)) score += 1;
+  if ((row.expected_revenue ?? 0) !== 0 || (row.odoo_expected_revenue ?? 0) !== 0) score += 1;
+  if ((row.probability ?? 0) !== 0 || (row.odoo_probability ?? 0) !== 0) score += 1;
+  if (text(row.won_status) && row.won_status !== "Pendiente") score += 1;
+  if (text(row.stage) && row.stage !== "LEAD") score += 1;
+  if (text(row.created_at)) score += 1;
+  return score;
+}
+
+/** Most filled fields, then the earliest created_at, then import_key. */
+function pickCandidate(rows: StoredLead[]): StoredLead {
+  return [...rows].sort((a, b) => {
+    const byData = filledScore(b) - filledScore(a);
+    if (byData) return byData;
+    const createdA = text(a.created_at) || "9999-99-99";
+    const createdB = text(b.created_at) || "9999-99-99";
+    if (createdA !== createdB) return createdA < createdB ? -1 : 1;
+    if (a.import_key !== b.import_key) return a.import_key < b.import_key ? -1 : 1;
+    return 0;
+  })[0];
+}
+
+function splitPick(rows: StoredLead[]): { row?: StoredLead; duplicates: StoredLead[] } {
+  if (!rows.length) return { duplicates: [] };
+  const row = pickCandidate(rows);
+  return { row, duplicates: rows.filter((candidate) => candidate.import_key !== row.import_key) };
+}
+
+function matchUnlinked(index: LeadIndex, raw: IngestLead, nameCounts: Map<string, number>): { row?: StoredLead; duplicates: StoredLead[] } {
   const signals = incomingSignals(raw);
   const groups: StoredLead[][] = [];
   if (signals.nits.length) {
@@ -400,25 +475,40 @@ function matchUnlinked(index: LeadIndex, raw: IngestLead): { row?: StoredLead; a
     const rows = index.byName.get(signals.nameKey) ?? [];
     if (rows.length) groups.push(rows);
   }
-  if (!groups.length) return { ambiguous: [] };
-  let chosen = groups[0];
-  for (const group of groups.slice(1)) {
-    const allowed = new Set(group.map((row) => row.import_key));
-    chosen = chosen.filter((row) => allowed.has(row.import_key));
+  if (groups.length) {
+    let chosen = groups[0];
+    for (const group of groups.slice(1)) {
+      const allowed = new Set(group.map((row) => row.import_key));
+      chosen = chosen.filter((row) => allowed.has(row.import_key));
+    }
+    if (chosen.length) return splitPick(chosen);
+    const union = new Map<string, StoredLead>();
+    for (const group of groups) for (const row of group) union.set(row.import_key, row);
+    return splitPick([...union.values()]);
   }
-  if (chosen.length === 1) return { row: chosen[0], ambiguous: [] };
-  if (chosen.length > 1) return { ambiguous: chosen };
-  const union = new Map<string, StoredLead>();
-  for (const group of groups) for (const row of group) union.set(row.import_key, row);
-  const all = [...union.values()];
-  if (all.length === 1) return { row: all[0], ambiguous: [] };
-  return { ambiguous: all };
+  return nameOnlyMatch(index, signals, nameCounts);
+}
+
+function nameOnlyMatch(
+  index: LeadIndex,
+  signals: { bareName: string; customer: string },
+  nameCounts: Map<string, number>,
+): { row?: StoredLead; duplicates: StoredLead[] } {
+  if (!signals.bareName) return { duplicates: [] };
+  const locals = index.byBareName.get(signals.bareName) ?? [];
+  if (locals.length !== 1 || nameCounts.get(signals.bareName) !== 1) return { duplicates: [] };
+  const local = locals[0];
+  const localCustomer = normalizeLabel(local.customer ?? "");
+  const incomingCustomer = normalizeLabel(signals.customer);
+  if (localCustomer && incomingCustomer) return { duplicates: [] };
+  return { row: local, duplicates: [] };
 }
 
 function forgetUnlinked(index: LeadIndex, row: StoredLead) {
   const meta = index.meta.get(row.import_key);
   if (!meta) return;
   if (meta.nameKey) removeMap(index.byName, meta.nameKey, row.import_key);
+  if (meta.bareName) removeMap(index.byBareName, meta.bareName, row.import_key);
   for (const nit of meta.nits) removeMap(index.byNit, nit, row.import_key);
   for (const email of meta.emails) removeMap(index.byEmail, email, row.import_key);
 }
@@ -431,34 +521,65 @@ function removeMap(map: Map<string, StoredLead[]>, key: string, importKey: strin
   else map.delete(key);
 }
 
-function fillSummary(result: IngestResult, index: LeadIndex) {
+function matchRef(row: StoredLead): IngestMatchRef {
+  return { importKey: row.import_key, name: row.name, customer: row.customer ?? "" };
+}
+
+function fillSummary(result: IngestResult, index: LeadIndex, seen: Set<string>, kept: Set<string>, archiveNow: boolean) {
+  const duplicateKeys = new Set(result.summary.possibleDuplicates.flatMap((group) => group.duplicates.map((row) => row.importKey)));
   const unlinked = index.rows
-    .filter((row) => row.sync_state !== "pending_create" && !text(row.odoo_id))
-    .map((row) => ({ importKey: row.import_key, name: row.name, customer: row.customer ?? "" }));
+    .filter((row) => row.sync_state !== "pending_create" && !text(row.odoo_id) && !duplicateKeys.has(row.import_key))
+    .map((row) => matchRef(row));
   result.summary.linked = result.wouldLink;
+  result.summary.possibleDuplicateCount = result.summary.possibleDuplicates.length;
+  result.summary.ambiguous = result.summary.possibleDuplicates.map((group) => ({
+    odooId: group.odooId,
+    name: group.name,
+    customer: group.customer,
+    candidates: [group.linked, ...group.duplicates],
+  }));
   result.summary.ambiguousCount = result.summary.ambiguous.length;
   result.summary.unlinked = unlinked;
   result.summary.unlinkedCount = unlinked.length;
+  if (!archiveNow) return;
+  const missing = index.rows.filter((row) => {
+    if (row.sync_state === "pending_create" || kept.has(row.import_key)) return false;
+    const odooId = text(row.odoo_id);
+    return Boolean(odooId) && !seen.has(odooId);
+  });
+  result.summary.missingLinked = missing.map((row) => ({ importKey: row.import_key, odooId: text(row.odoo_id), name: row.name, customer: row.customer ?? "" }));
+  result.summary.missingLinkedCount = result.summary.missingLinked.length;
 }
 
-function planLead(index: LeadIndex, odooId: string, raw: IngestLead, result: IngestResult, statements: SqlBatch[], dryRun: boolean): LeadOutcome {
+function planLead(
+  index: LeadIndex,
+  odooId: string,
+  raw: IngestLead,
+  result: IngestResult,
+  statements: SqlBatch[],
+  dryRun: boolean,
+  kept: Set<string>,
+  nameCounts: Map<string, number>,
+): LeadOutcome {
   const key = leadKey(odooId);
   let existing = index.byOdoo.get(odooId) ?? index.byKey.get(key);
   let action: LeadOutcome["action"] = existing ? "updated" : "inserted";
   if (!existing) {
-    const match = matchUnlinked(index, raw);
+    const match = matchUnlinked(index, raw, nameCounts);
     if (match.row) {
       existing = match.row;
       action = "linked";
       forgetUnlinked(index, match.row);
-    } else if (match.ambiguous.length > 1) {
-      result.errors.push({ id: odooId, message: "Hay varias oportunidades locales con el mismo nombre y cliente. No se enlazó." });
-      result.summary.ambiguous.push({
-        odooId,
-        name: text(raw.name),
-        customer: text(raw.customer ?? raw.partner ?? raw.partner_name),
-        candidates: match.ambiguous.map((row) => ({ importKey: row.import_key, name: row.name, customer: row.customer ?? "" })),
-      });
+      if (match.duplicates.length) {
+        for (const duplicate of match.duplicates) kept.add(duplicate.import_key);
+        result.summary.possibleDuplicates.push({
+          odooId,
+          name: text(raw.name),
+          customer: text(raw.customer ?? raw.partner ?? raw.partner_name),
+          linked: matchRef(match.row),
+          duplicates: match.duplicates.map(matchRef),
+        });
+      }
     }
   }
   const name = text(raw.name) || existing?.name || "";
@@ -576,7 +697,7 @@ function planArchive(
     if (row.sync_state === "pending_create") continue;
     if (kept.has(row.import_key)) continue;
     const odooId = text(row.odoo_id);
-    if (odooId && seen.has(odooId)) continue;
+    if (!odooId || seen.has(odooId)) continue;
     result.wouldArchive += 1;
     if (dryRun) continue;
     statements.push({

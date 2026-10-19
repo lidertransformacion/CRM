@@ -297,7 +297,7 @@ describe("odoo browser agent", () => {
     expect(await db.get<{ n: number }>("SELECT COUNT(*) AS n FROM leads")).toMatchObject({ n: 1 });
   });
 
-  it("inserts the Odoo lead when two local rows share the same identity", async () => {
+  it("links one local row when two share the same identity and keeps the other", async () => {
     const { db } = await tempSql();
     for (const key of ["excel:a", "excel:b"]) {
       await db.run(`INSERT INTO leads (import_key, name, stage, customer, created_at, active) VALUES (?, 'Café Centro', 'LEAD', 'Hotel Luna', '2024-05-02', 1)`, [key]);
@@ -306,14 +306,21 @@ describe("odoo browser agent", () => {
       mode: "incremental",
       leads: [{ id: 50, name: "Cafe Centro", customer: "hotel luna", createdAt: "2024-05-02", stage: "LEAD" }],
     });
-    expect(result.linked).toBe(0);
-    expect(result.inserted).toBe(1);
-    expect(result.errors[0]?.message).toMatch(/No se enlazó/);
-    expect(await db.get<{ n: number }>("SELECT COUNT(*) AS n FROM leads WHERE odoo_id IS NULL OR odoo_id = ''")).toMatchObject({ n: 2 });
-    expect((await db.get<{ import_key: string }>("SELECT import_key FROM leads WHERE odoo_id = ?", ["50"]))?.import_key).toBe("odoo:50");
-    expect(result.summary.ambiguous).toHaveLength(1);
-    expect(result.summary.ambiguous[0]?.candidates).toHaveLength(2);
-    expect(result.summary.linked).toBe(0);
+    expect(result).toMatchObject({ linked: 1, inserted: 0, errors: [] });
+    expect(result.summary.linked).toBe(1);
+    expect(result.summary.possibleDuplicates).toHaveLength(1);
+    expect(result.summary.possibleDuplicates[0]?.linked.importKey).toBe("excel:a");
+    expect(result.summary.possibleDuplicates[0]?.duplicates.map((row) => row.importKey)).toEqual(["excel:b"]);
+    expect(result.summary.ambiguous[0]?.candidates.map((row) => row.importKey)).toEqual(["excel:a", "excel:b"]);
+    expect(result.summary.unlinked).toEqual([]);
+    expect(await db.get<{ n: number }>("SELECT COUNT(*) AS n FROM leads")).toMatchObject({ n: 2 });
+    expect(await db.get<{ odoo_id: string; active: number }>("SELECT odoo_id, active FROM leads WHERE import_key = 'excel:a'")).toMatchObject({ odoo_id: "50", active: 1 });
+    expect(await db.get<{ odoo_id: string | null; active: number; missing_from_odoo: number }>("SELECT odoo_id, active, missing_from_odoo FROM leads WHERE import_key = 'excel:b'")).toMatchObject({
+      odoo_id: null,
+      active: 1,
+      missing_from_odoo: 0,
+    });
+    expect(await db.get("SELECT import_key FROM leads WHERE import_key = 'odoo:50'")).toBeUndefined();
   });
 
   it("links Oportunidad de FEMSA to FEMSA and leaves an unmatched row out of the link", async () => {
@@ -335,10 +342,11 @@ describe("odoo browser agent", () => {
         { id: 8, name: "keralty sas", partner: "KERALTY SAS", stage: "NEGOCIACION", active: true },
       ],
     });
-    expect(preview).toMatchObject({ wouldLink: 2, wouldInsert: 0, wouldArchive: 1, linked: 0, inserted: 0, archived: 0 });
-    expect(preview.summary).toMatchObject({ linked: 2, ambiguousCount: 0, unlinkedCount: 1 });
+    expect(preview).toMatchObject({ wouldLink: 2, wouldInsert: 0, wouldArchive: 0, linked: 0, inserted: 0, archived: 0 });
+    expect(preview.summary).toMatchObject({ linked: 2, ambiguousCount: 0, unlinkedCount: 1, missingLinkedCount: 0, possibleDuplicateCount: 0 });
     expect(preview.summary.unlinked).toEqual([{ importKey: "excel:hotel", name: "HOTEL W", customer: "" }]);
     expect(preview.summary.ambiguous).toEqual([]);
+    expect(preview.summary.missingLinked).toEqual([]);
     expect((await db.get<{ odoo_id: string | null }>("SELECT odoo_id FROM leads WHERE import_key = 'excel:femsa'"))?.odoo_id ?? null).toBeNull();
 
     const live = await ingestSnapshot(db, {
@@ -361,15 +369,16 @@ describe("odoo browser agent", () => {
     });
     expect(await db.get<{ n: number }>("SELECT COUNT(*) AS n FROM leads")).toMatchObject({ n: 3 });
     const committed = await commitSnapshot(db, { snapshotId: "odoo-femsa" });
-    expect(committed).toMatchObject({ seen: 2, archived: 1 });
+    expect(committed).toMatchObject({ seen: 2, archived: 0, missingLinkedCount: 0 });
     expect(await db.get<{ active: number; odoo_id: string }>("SELECT active, odoo_id FROM leads WHERE import_key = 'excel:femsa'")).toMatchObject({ active: 1, odoo_id: "7" });
-    expect(await db.get<{ active: number; missing_from_odoo: number }>("SELECT active, missing_from_odoo FROM leads WHERE import_key = 'excel:hotel'")).toMatchObject({
-      active: 0,
-      missing_from_odoo: 1,
+    expect(await db.get<{ active: number; missing_from_odoo: number; odoo_id: string | null }>("SELECT active, missing_from_odoo, odoo_id FROM leads WHERE import_key = 'excel:hotel'")).toMatchObject({
+      active: 1,
+      missing_from_odoo: 0,
+      odoo_id: null,
     });
   });
 
-  it("does not auto-link when several FEMSA rows match, and reports them", async () => {
+  it("links the oldest FEMSA row when several match and flags the rest", async () => {
     const { db } = await tempSql();
     await db.run(`INSERT INTO leads (import_key, name, stage, customer, created_at, active) VALUES ('excel:a', 'Oportunidad de FEMSA', 'LEAD', 'FEMSA', '2024-01-01', 1)`);
     await db.run(`INSERT INTO leads (import_key, name, stage, customer, created_at, active) VALUES ('excel:b', 'FEMSA', 'LEAD', 'FEMSA', '2024-06-01', 1)`);
@@ -378,11 +387,90 @@ describe("odoo browser agent", () => {
       dryRun: true,
       leads: [{ id: 7, name: "Oportunidad de FEMSA", customer: "FEMSA", stage: "LEAD", active: true }],
     });
-    expect(preview).toMatchObject({ wouldLink: 0, wouldInsert: 1, linked: 0 });
+    expect(preview).toMatchObject({ wouldLink: 1, wouldInsert: 0, wouldArchive: 0, linked: 0, inserted: 0 });
     expect(preview.summary.ambiguousCount).toBe(1);
-    expect(preview.summary.ambiguous[0]?.candidates.map((row) => row.importKey).sort()).toEqual(["excel:a", "excel:b"]);
-    expect(preview.summary.unlinked.map((row) => row.importKey).sort()).toEqual(["excel:a", "excel:b"]);
+    expect(preview.summary.possibleDuplicateCount).toBe(1);
+    expect(preview.summary.possibleDuplicates[0]?.linked.importKey).toBe("excel:a");
+    expect(preview.summary.possibleDuplicates[0]?.duplicates.map((row) => row.importKey)).toEqual(["excel:b"]);
+    expect(preview.summary.ambiguous[0]?.candidates.map((row) => row.importKey)).toEqual(["excel:a", "excel:b"]);
+    expect(preview.summary.unlinked).toEqual([]);
+    expect(preview.summary.missingLinkedCount).toBe(0);
     expect(await db.get<{ n: number }>("SELECT COUNT(*) AS n FROM leads")).toMatchObject({ n: 2 });
+
+    const live = await ingestSnapshot(db, {
+      mode: "full",
+      leads: [{ id: 7, name: "Oportunidad de FEMSA", customer: "FEMSA", stage: "LEAD", active: true }],
+    });
+    expect(live).toMatchObject({ linked: 1, inserted: 0, archived: 0 });
+    expect(await db.get<{ odoo_id: string; active: number }>("SELECT odoo_id, active FROM leads WHERE import_key = 'excel:a'")).toMatchObject({ odoo_id: "7", active: 1 });
+    expect(await db.get<{ odoo_id: string | null; active: number; missing_from_odoo: number }>("SELECT odoo_id, active, missing_from_odoo FROM leads WHERE import_key = 'excel:b'")).toMatchObject({
+      odoo_id: null,
+      active: 1,
+      missing_from_odoo: 0,
+    });
+    expect(await db.get<{ n: number }>("SELECT COUNT(*) AS n FROM leads")).toMatchObject({ n: 2 });
+  });
+
+  it("links the fuller local row when it is newer than a thinner duplicate", async () => {
+    const { db } = await tempSql();
+    await db.run(`INSERT INTO leads (import_key, name, stage, customer, created_at, active, won_status) VALUES ('excel:old', 'FEMSA', 'LEAD', 'FEMSA', '2020-01-01', 1, 'Pendiente')`);
+    await db.run(
+      `INSERT INTO leads (import_key, name, stage, customer, created_at, active, won_status, salesperson, tags, expected_revenue)
+       VALUES ('excel:rich', 'Oportunidad de FEMSA', 'NEGOCIACIÓN', 'FEMSA', '2024-06-01', 1, 'Ganado', 'Ana', 'vip', 1000)`,
+    );
+    const preview = await ingestSnapshot(db, {
+      mode: "full",
+      dryRun: true,
+      leads: [{ id: 7, name: "FEMSA", customer: "FEMSA", stage: "LEAD", active: true }],
+    });
+    expect(preview.summary.possibleDuplicates[0]?.linked.importKey).toBe("excel:rich");
+    expect(preview.summary.possibleDuplicates[0]?.duplicates.map((row) => row.importKey)).toEqual(["excel:old"]);
+    expect(preview).toMatchObject({ wouldLink: 1, wouldInsert: 0, wouldArchive: 0 });
+  });
+
+  it("links by name alone when the customer is empty on one side and the name is unique", async () => {
+    const { db } = await tempSql();
+    await db.run(`INSERT INTO leads (import_key, name, stage, customer, created_at, active) VALUES ('excel:hotel', 'HOTEL W', 'LEAD', '', '2026-09-01', 1)`);
+    await db.run(`INSERT INTO leads (import_key, name, stage, customer, created_at, active) VALUES ('excel:cafe', 'Oportunidad de Café Centro', 'LEAD', 'Hotel Luna', '2024-05-02', 1)`);
+    const linked = await ingestSnapshot(db, {
+      mode: "incremental",
+      leads: [
+        { id: 3, name: "Oportunidad de HOTEL W", customer: "Cadena", stage: "LEAD", active: true },
+        { id: 4, name: "Café Centro", partner_name: "", stage: "LEAD", active: true },
+      ],
+    });
+    expect(linked).toMatchObject({ linked: 2, inserted: 0 });
+    expect(await db.get<{ odoo_id: string }>("SELECT odoo_id FROM leads WHERE import_key = 'excel:hotel'")).toMatchObject({ odoo_id: "3" });
+    expect(await db.get<{ odoo_id: string }>("SELECT odoo_id FROM leads WHERE import_key = 'excel:cafe'")).toMatchObject({ odoo_id: "4" });
+    expect(await db.get<{ n: number }>("SELECT COUNT(*) AS n FROM leads")).toMatchObject({ n: 2 });
+  });
+
+  it("does not link by name alone when that name is shared or both customers are present", async () => {
+    const { db } = await tempSql();
+    await db.run(`INSERT INTO leads (import_key, name, stage, customer, created_at, active) VALUES ('excel:a', 'HOTEL W', 'LEAD', '', '2026-01-01', 1)`);
+    await db.run(`INSERT INTO leads (import_key, name, stage, customer, created_at, active) VALUES ('excel:b', 'Oportunidad de HOTEL W', 'LEAD', '', '2026-02-01', 1)`);
+    await db.run(`INSERT INTO leads (import_key, name, stage, customer, created_at, active) VALUES ('excel:femsa', 'FEMSA', 'LEAD', 'FEMSA', '2024-01-01', 1)`);
+    const sharedLocal = await ingestSnapshot(db, {
+      mode: "full",
+      dryRun: true,
+      leads: [{ id: 3, name: "Hotel W", customer: "Cadena", stage: "LEAD", active: true }],
+    });
+    expect(sharedLocal).toMatchObject({ wouldLink: 0, wouldInsert: 1, wouldArchive: 0 });
+    expect(sharedLocal.summary.unlinked.map((row) => row.importKey).sort()).toEqual(["excel:a", "excel:b", "excel:femsa"]);
+
+    const sharedIncoming = await ingestSnapshot(db, {
+      mode: "incremental",
+      leads: [
+        { id: 3, name: "Hotel W", customer: "Cadena", stage: "LEAD", active: true },
+        { id: 4, name: "HOTEL W", customer: "", stage: "LEAD", active: true },
+        { id: 5, name: "FEMSA", customer: "Otra empresa", stage: "LEAD", active: true },
+      ],
+    });
+    expect(sharedIncoming).toMatchObject({ linked: 0, inserted: 3 });
+    expect(await db.get<{ odoo_id: string | null; active: number }>("SELECT odoo_id, active FROM leads WHERE import_key = 'excel:a'")).toMatchObject({ odoo_id: null, active: 1 });
+    expect(await db.get<{ odoo_id: string | null; active: number }>("SELECT odoo_id, active FROM leads WHERE import_key = 'excel:b'")).toMatchObject({ odoo_id: null, active: 1 });
+    expect(await db.get<{ odoo_id: string | null; active: number }>("SELECT odoo_id, active FROM leads WHERE import_key = 'excel:femsa'")).toMatchObject({ odoo_id: null, active: 1 });
+    expect(await db.get<{ n: number }>("SELECT COUNT(*) AS n FROM leads")).toMatchObject({ n: 6 });
   });
 
   it("links by email or NIT when the names differ", async () => {
@@ -411,6 +499,8 @@ describe("odoo browser agent", () => {
     await ingestSnapshot(db, { mode: "full", leads: [{ id: 1, name: "A", stage: "LEAD", active: true }] });
     const preview = await ingestSnapshot(db, { mode: "full", dryRun: true, leads: [{ id: 2, name: "B", stage: "LEAD", active: true }] });
     expect(preview).toMatchObject({ wouldInsert: 1, wouldArchive: 1, inserted: 0, archived: 0 });
+    expect(preview.summary.missingLinkedCount).toBe(1);
+    expect(preview.summary.missingLinked.map((row) => row.odooId)).toEqual(["1"]);
     expect((await db.get<{ active: number }>("SELECT active FROM leads WHERE odoo_id = ?", ["1"]))?.active).toBe(1);
     expect(await db.get("SELECT import_key FROM leads WHERE odoo_id = ?", ["2"])).toBeUndefined();
   });
@@ -450,17 +540,17 @@ describe("odoo browser agent", () => {
     await expect(ingestSnapshot(db, { mode: "incremental", snapshotId: "odoo-2026-10-19", leads: [] })).rejects.toThrow(/snapshotId/);
 
     const preview = await commitSnapshot(db, { snapshotId: "odoo-2026-10-19", dryRun: true });
-    expect(preview).toMatchObject({ seen: 2, archived: 0, wouldArchive: 2, dryRun: true });
+    expect(preview).toMatchObject({ seen: 2, archived: 0, wouldArchive: 1, missingLinkedCount: 1, dryRun: true });
     expect((await db.get<{ active: number }>("SELECT active FROM leads WHERE odoo_id = ?", ["12"]))?.active).toBe(1);
 
     const committed = await commitSnapshot(db, { snapshotId: "odoo-2026-10-19" });
-    expect(committed).toMatchObject({ seen: 2, archived: 2, wouldArchive: 2 });
+    expect(committed).toMatchObject({ seen: 2, archived: 1, wouldArchive: 1, missingLinkedCount: 1 });
     expect(
       await db.get<{ active: number; missing_from_odoo: number; won_status: string }>("SELECT active, missing_from_odoo, won_status FROM leads WHERE odoo_id = ?", ["12"]),
     ).toMatchObject({ active: 0, missing_from_odoo: 1, won_status: "Ganado" });
     expect(
-      await db.get<{ active: number; missing_from_odoo: number }>("SELECT active, missing_from_odoo FROM leads WHERE import_key = ?", ["excel:solo"]),
-    ).toMatchObject({ active: 0, missing_from_odoo: 1 });
+      await db.get<{ active: number; missing_from_odoo: number; odoo_id: string | null }>("SELECT active, missing_from_odoo, odoo_id FROM leads WHERE import_key = ?", ["excel:solo"]),
+    ).toMatchObject({ active: 1, missing_from_odoo: 0, odoo_id: null });
     expect(
       await db.get<{ active: number; missing_from_odoo: number; sync_state: string }>("SELECT active, missing_from_odoo, sync_state FROM leads WHERE import_key = ?", ["local:nuevo"]),
     ).toMatchObject({ active: 1, missing_from_odoo: 0, sync_state: "pending_create" });
@@ -514,13 +604,16 @@ describe("odoo browser agent", () => {
 
     await db.batch(
       Array.from({ length: 1000 }, (_, i) => ({
-        sql: "INSERT INTO leads (import_key, name, stage, customer, created_at, active, won_status) VALUES (?, ?, 'LEAD', 'Nadie', '2020-01-01', 1, ?)",
-        params: [`extra:${i}`, `Extra ${i}`, i === 0 ? "Ganado" : "Pendiente"],
+        sql: "INSERT INTO leads (import_key, name, stage, customer, created_at, active, won_status, odoo_id) VALUES (?, ?, 'LEAD', 'Nadie', '2020-01-01', 1, ?, ?)",
+        params: [`extra:${i}`, `Extra ${i}`, i === 0 ? "Ganado" : "Pendiente", `x${i}`],
       })),
+    );
+    await db.run(
+      `INSERT INTO leads (import_key, name, stage, customer, created_at, active, won_status) VALUES ('excel:never', 'Nunca', 'LEAD', 'Nadie', '2020-01-01', 1, 'Pendiente')`,
     );
     const commit = counting(db);
     const committed = await commitSnapshot(commit.tracked, { snapshotId: "bulk" });
-    expect(committed).toMatchObject({ seen: 1000, archived: 1000 });
+    expect(committed).toMatchObject({ seen: 1000, archived: 1000, missingLinkedCount: 1000 });
     expect(commit.calls).toBeLessThan(40);
     expect(commit.sizes.length).toBeGreaterThan(0);
     expect(Math.max(...commit.sizes)).toBeLessThanOrEqual(SQL_BATCH_LIMIT);
@@ -534,6 +627,11 @@ describe("odoo browser agent", () => {
       sync_state: "pending_create",
     });
     expect(await db.get<{ active: number }>("SELECT active FROM leads WHERE import_key = 'excel:1'")).toMatchObject({ active: 1 });
+    expect(await db.get<{ active: number; missing_from_odoo: number; odoo_id: string | null }>("SELECT active, missing_from_odoo, odoo_id FROM leads WHERE import_key = 'excel:never'")).toMatchObject({
+      active: 1,
+      missing_from_odoo: 0,
+      odoo_id: null,
+    });
   });
 });
 
