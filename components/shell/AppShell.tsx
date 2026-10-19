@@ -149,11 +149,10 @@ function SidebarNav({ pathname, user }: { pathname: string; user: ShellUser }) {
       {NAV.map((item) => (
         <NavRow key={item.href} href={item.href} icon={item.icon} label={item.label} description={item.description} active={isActive(pathname, item)} />
       ))}
-      {user?.role === "admin" && (
-        <div className="mt-3.5 border-t border-line-2 pt-2">
-          <NavRow href="/ajustes" icon={Settings} label="Ajustes" description="Usuarios y contraseñas" active={settingsActive} />
-        </div>
-      )}
+      {/* Siempre visible: la página de Ajustes ya bloquea a quien no sea administrador. */}
+      <div className="mt-3.5 border-t border-line-2 pt-2">
+        <NavRow href="/ajustes" icon={Settings} label="Ajustes" description={user?.role === "user" ? "Solo administradores" : "Crear usuarios y contraseñas"} active={settingsActive} />
+      </div>
     </nav>
   );
 }
