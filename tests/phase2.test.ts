@@ -130,6 +130,11 @@ describe("email outbox", () => {
     );
     expect(id).toBe("gmail-1");
     expect(fetchSpy).toHaveBeenCalledTimes(2);
+    const gmailUrls = fetchSpy.mock.calls.map((call) => String(call[0])).filter((url) => url.includes("gmail.googleapis.com"));
+    expect(gmailUrls).toEqual(["https://gmail.googleapis.com/gmail/v1/users/me/messages/send"]);
+    const source = fs.readFileSync(path.join(process.cwd(), "lib/mail/gmail.ts"), "utf8");
+    expect(source).not.toContain("users/me/profile");
+    expect(source).not.toContain("gmail.readonly");
     const { db } = await tempSql();
     await enqueueEmail(db, { to: "cliente@hotel.com", subject: "Oferta", body: "Hola" });
     vi.stubEnv("MAIL_MODE", "gmail_api");

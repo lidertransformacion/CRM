@@ -23,7 +23,7 @@
     "crons": ["*/5 * * * *"]
   },
   "vars": {
-    "MAIL_MODE": "log",
+    "MAIL_MODE": "gmail_api",
     "MAIL_FROM_ADDRESS": "lidertransformacion@libertariocoffee.com",
     "MAIL_FROM_NAME": "Comercial Libertario",
     "SHEETS_SYNC_ENABLED": "false",

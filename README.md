@@ -52,7 +52,7 @@ Every page and API route requires a signed `crm_session` cookie. Public routes a
 
 Production deploys from `main` through Cloudflare Workers Builds. The dashboard Git integration creates its own API token. This repository has no GitHub Actions workflow and no Cloudflare token. The exact dashboard fields are in [docs/deploy-cloudflare.md](docs/deploy-cloudflare.md).
 
-The Worker name is `crm-libertario`. The D1 binding `DB` is the existing database `crm-pay-line` (`ded1c012-2e0a-4b1b-9339-24047b32a99e`). `MAIL_MODE` is `log` and `SHEETS_SYNC_ENABLED` is `false`. Secrets stay out of `wrangler.jsonc`.
+The Worker name is `crm-libertario`. The D1 binding `DB` is the existing database `crm-pay-line` (`ded1c012-2e0a-4b1b-9339-24047b32a99e`). `MAIL_MODE` is `gmail_api` and `SHEETS_SYNC_ENABLED` is `false`. Secrets stay out of `wrangler.jsonc`.
 
 Set a secret from a trusted machine. Wrangler prompts for the value.
 
@@ -77,7 +77,7 @@ On the live Worker, a signed-in admin uses Ajustes or `POST /api/users/reset` in
 | --- | --- | --- | --- |
 | `SESSION_SECRET` | secret | yes | HMAC cookie key, minimum 16 characters |
 | `BOOTSTRAP_ADMIN_PASSWORD` | secret | yes | Initial password for `lidertransformacion@libertariocoffee.com`, minimum 12 characters |
-| `MAIL_MODE` | var | no | Committed as `log` (queue only). Set the var to `gmail_api` to send |
+| `MAIL_MODE` | var | no | Committed as `gmail_api`. `log` only queues |
 | `MAIL_FROM_ADDRESS` | var | no | `lidertransformacion@libertariocoffee.com` |
 | `MAIL_FROM_NAME` | var | no | `Comercial Libertario` |
 | `SHEETS_SYNC_ENABLED` | var | no | Committed as `false`. Dry-run only until `true` |
@@ -99,7 +99,7 @@ Binding: D1 database `crm-pay-line` as `DB`.
 - **KPIs** — Open, won, and lost follow Odoo `active` and won/lost status, not the stage alone. On the 15 Oct 2026 export: 169 open, 182 won, 309 lost, 39 recurrente.
 - **Comodatos** — 224 machines. **Ver diff** plans against the bundled CSV while sync is off. **Traer de la hoja** and **Enviar cambios** write only when `SHEETS_SYNC_ENABLED=true`. The sheet is the source on pull. Rows are matched by serial and never deleted.
 - **Clientes** — Timeline of opportunities, activities, committee items, and comodatos.
-- **Correos** — Spanish drafts you can copy or queue. **Procesar bandeja** follows `MAIL_MODE`. The default `log` leaves the message queued as `Comercial Libertario <lidertransformacion@libertariocoffee.com>` and does not call Gmail. `gmail_api` sends it and a cron drains the outbox.
+- **Correos** — Spanish drafts you can copy or queue. **Procesar bandeja** follows `MAIL_MODE`. Production is `gmail_api`: it sends as `Comercial Libertario <lidertransformacion@libertariocoffee.com>` through `users/me/messages/send`, and a cron drains the outbox. `log` leaves the message queued.
 - **Ajustes** — Admins create users.
 - **Cuenta** — Password change.
 

@@ -39,19 +39,19 @@ The build image defaults to Node.js 24. This repository's `.nvmrc` is `22.14.0`,
 | D1 binding | `DB` |
 | D1 database name | `crm-pay-line` |
 | D1 database id | `ded1c012-2e0a-4b1b-9339-24047b32a99e` |
-| `MAIL_MODE` | `log` |
+| `MAIL_MODE` | `gmail_api` |
 | `SHEETS_SYNC_ENABLED` | `false` |
 | Cron | `*/5 * * * *` |
 
 These plain vars are also committed: `MAIL_FROM_ADDRESS`, `MAIL_FROM_NAME`, `GOOGLE_SHEETS_SPREADSHEET_ID`, `GOOGLE_SHEETS_TAB`, and `BOOTSTRAP_ADMIN_EMAIL`.
 
-`MAIL_MODE=log` only queues mail. It does not call Gmail and it does not mark the row sent. The cron and the request path both skip the outbox in that mode.
+The committed `MAIL_MODE` is `gmail_api`, so the cron and each request drain the outbox through the Gmail API. The sender calls `users/me/messages/send` only. That needs the `gmail.send` scope. It does not call `users/me/profile`. Setting the var back to `log` leaves mail queued and skips the drain.
 
 ## Secrets to set
 
 Set these in the Worker **crm-libertario**, **Settings** → **Variables and Secrets**. They are not in `wrangler.jsonc` or Git.
 
-To send mail, set this secret and then change the plain var `MAIL_MODE` from `log` to `gmail_api` (a var, not a secret):
+Sending uses this secret. `MAIL_MODE` is already the plain var `gmail_api`:
 
 | Secret | Required when | Value |
 | --- | --- | --- |

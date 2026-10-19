@@ -131,7 +131,7 @@ When site is dirty, the note says the local code and sequence changed, and the f
 
 ## Correos
 
-Templates are seeded in `email_templates` and rendered in the browser. Copy puts plain text on the clipboard. **Encolar envío** inserts `email_outbox`. **Procesar bandeja** calls `processOutbox`. The default `MAIL_MODE=log` leaves the row queued and does not call Gmail. `gmail_api` sends as `Comercial Libertario <lidertransformacion@libertariocoffee.com>` with the secret `GMAIL_TOKEN_JSON` (`client_id`, `client_secret`, `refresh_token`). A cron (`*/5 * * * *`) and `waitUntil` on each request drain the outbox only in that mode. A recipient with `email_opt_out` is skipped. Failed sends retry up to 5 times. The same dedupe key is not queued twice unless the sender asks to send again.
+Templates are seeded in `email_templates` and rendered in the browser. Copy puts plain text on the clipboard. **Encolar envío** inserts `email_outbox`. **Procesar bandeja** calls `processOutbox`. Production `MAIL_MODE=gmail_api` sends as `Comercial Libertario <lidertransformacion@libertariocoffee.com>` with the secret `GMAIL_TOKEN_JSON` (`client_id`, `client_secret`, `refresh_token`). The send call is `users/me/messages/send` and needs only the `gmail.send` scope. `MAIL_MODE=log` leaves the row queued and does not call Gmail. A cron (`*/5 * * * *`) and `waitUntil` on each request drain the outbox only when the mode is `gmail_api`. A recipient with `email_opt_out` is skipped. Failed sends retry up to 5 times. The same dedupe key is not queued twice unless the sender asks to send again.
 
 ## Odoo agent
 
