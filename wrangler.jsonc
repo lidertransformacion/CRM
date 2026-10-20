@@ -19,6 +19,12 @@
       "migrations_dir": "migrations"
     }
   ],
+  "r2_buckets": [
+    {
+      "binding": "MAIL_FILES",
+      "bucket_name": "crm-libertario-mail"
+    }
+  ],
   "triggers": {
     "crons": ["*/5 * * * *"]
   },

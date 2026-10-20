@@ -1,8 +1,13 @@
 "use client";
 
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { Copy, Link2, Unlink } from "lucide-react";
+import { Copy, Link2, Send, Unlink } from "lucide-react";
 import { buildCommitteeEmail } from "@/lib/committee/email";
+import { AttachmentBar } from "@/components/emails/AttachmentBar";
+import { RichTextEditor } from "@/components/emails/RichTextEditor";
+import { deleteMailFile, uploadMailFile, type UploadedFile } from "@/components/emails/upload";
+import { RecipientFields, type MailFavorite } from "@/components/committee/RecipientFields";
+import { MAX_MAIL_BYTES } from "@/lib/mail/html";
 import { boardStats } from "@/lib/committee/metrics";
 import type { CommitteeDoc } from "@/lib/committee/types";
 import { Badge } from "@/components/ui/badge";
@@ -23,9 +28,52 @@ export function EmailDialog({ open, onOpenChange, doc, asOf }: { open: boolean; 
   const { toast } = useToast();
   const email = useMemo(() => buildCommitteeEmail(doc, asOf), [doc, asOf]);
   const [copied, setCopied] = useState<"subject" | "body" | null>(null);
+  const [to, setTo] = useState<string[]>([]);
+  const [cc, setCc] = useState<string[]>([]);
+  const [users, setUsers] = useState<{ email: string }[]>([]);
+  const [favorites, setFavorites] = useState<MailFavorite[]>([]);
+  const [testMode, setTestMode] = useState(true);
+  const [gmailConnected, setGmailConnected] = useState(false);
+  const [savingFavorite, setSavingFavorite] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [notice, setNotice] = useState<{ tone: "ok" | "danger"; text: string } | null>(null);
+  const [html, setHtml] = useState(email.html);
+  const [files, setFiles] = useState<UploadedFile[]>([]);
+  const [inlineBytes, setInlineBytes] = useState(0);
+  const [uploading, setUploading] = useState(false);
+  const attachmentBytes = files.reduce((sum, file) => sum + file.size, 0) + inlineBytes;
 
   useEffect(() => {
-    if (!open) setCopied(null);
+    if (!open) {
+      setCopied(null);
+      setNotice(null);
+      return;
+    }
+    setHtml(email.html);
+  }, [open, email.html]);
+
+  useEffect(() => {
+    if (!open) return;
+    const controller = new AbortController();
+    void (async () => {
+      try {
+        const response = await fetch("/api/mail/favorites", { signal: controller.signal });
+        if (!response.ok) return;
+        const payload = (await response.json()) as {
+          favorites: MailFavorite[];
+          users: { email: string }[];
+          testMode: boolean;
+          gmailConnected: boolean;
+        };
+        setFavorites(payload.favorites);
+        setUsers(payload.users);
+        setTestMode(payload.testMode !== false);
+        setGmailConnected(payload.gmailConnected === true);
+      } catch {
+        /* el diálogo sigue permitiendo escribir correos a mano */
+      }
+    })();
+    return () => controller.abort();
   }, [open]);
 
   async function copy(kind: "subject" | "body") {
@@ -35,24 +83,128 @@ export function EmailDialog({ open, onOpenChange, doc, asOf }: { open: boolean; 
       } else if (typeof ClipboardItem !== "undefined") {
         await navigator.clipboard.write([
           new ClipboardItem({
-            "text/html": new Blob([email.html], { type: "text/html" }),
+            "text/html": new Blob([html], { type: "text/html" }),
             "text/plain": new Blob([email.text], { type: "text/plain" }),
           }),
         ]);
       } else {
-        await navigator.clipboard.writeText(email.text);
+        await navigator.clipboard.writeText(html);
       }
       setCopied(kind);
-      toast({ title: kind === "subject" ? "Asunto copiado" : "Correo copiado con la tabla", description: "Pégalo en Outlook o Gmail." });
+      toast({ title: kind === "subject" ? "Asunto copiado" : "Correo copiado con la tabla" });
     } catch {
       toast({ title: "No se pudo copiar", description: "El navegador bloqueó el portapapeles. Selecciona el texto del correo y cópialo a mano.", tone: "danger" });
     }
   }
 
+  async function saveFavorite(name: string) {
+    setSavingFavorite(true);
+    try {
+      const response = await fetch("/api/mail/favorites", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, to, cc }),
+      });
+      const payload = (await response.json()) as { favorite?: MailFavorite; error?: string };
+      if (!response.ok || !payload.favorite) throw new Error(payload.error || "No se pudo guardar.");
+      const favorite = payload.favorite;
+      setFavorites((current) => [...current.filter((item) => item.id !== favorite.id), favorite].sort((a, b) => a.name.localeCompare(b.name, "es")));
+      toast({ title: "Favorito guardado", description: favorite.name });
+    } catch (error) {
+      toast({ title: "No se pudo guardar el favorito", description: error instanceof Error ? error.message : undefined, tone: "danger" });
+      throw error;
+    } finally {
+      setSavingFavorite(false);
+    }
+  }
+
+  async function deleteFavorite(id: number) {
+    const previous = favorites;
+    setFavorites((current) => current.filter((item) => item.id !== id));
+    try {
+      const response = await fetch(`/api/mail/favorites/${id}`, { method: "DELETE" });
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => ({}))) as { error?: string };
+        throw new Error(payload.error || "No se pudo quitar.");
+      }
+      toast({ title: "Favorito quitado" });
+    } catch (error) {
+      setFavorites(previous);
+      toast({ title: "No se pudo quitar el favorito", description: error instanceof Error ? error.message : undefined, tone: "danger" });
+    }
+  }
+
+  async function addCommitteeFile(file: File) {
+    if (attachmentBytes + file.size > MAX_MAIL_BYTES) {
+      toast({ title: "El correo pasa de 20 MB", description: "Gmail rechaza mensajes cerca de 25 MB ya codificados.", tone: "danger" });
+      return;
+    }
+    setUploading(true);
+    try {
+      const saved = await uploadMailFile(file);
+      setFiles((current) => [...current, saved]);
+    } catch (error) {
+      toast({ title: "No se pudo adjuntar", description: error instanceof Error ? error.message : undefined, tone: "danger" });
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  async function removeCommitteeFile(id: string) {
+    const previous = files;
+    setFiles((current) => current.filter((file) => file.id !== id));
+    try {
+      await deleteMailFile(id);
+    } catch (error) {
+      setFiles(previous);
+      toast({ title: "No se pudo quitar el archivo", description: error instanceof Error ? error.message : undefined, tone: "danger" });
+    }
+  }
+
+  async function send() {
+    setSending(true);
+    setNotice(null);
+    try {
+      const response = await fetch("/api/committee/email", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ committeeNumber: doc.committee.number, to, cc, asOf, html, attachmentIds: files.map((file) => file.id) }),
+      });
+      const payload = (await response.json()) as { status?: string; testMode?: boolean; mode?: string; error?: string | null };
+      if (!response.ok) throw new Error(payload.error || "No se pudo enviar.");
+      if (payload.status === "sent") {
+        const text = payload.testMode !== false ? "Enviado en modo de prueba. Llegó a la cuenta que envía, no a los destinatarios." : "Enviado a los destinatarios.";
+        setNotice({ tone: "ok", text });
+        toast({ title: "Resumen enviado", description: text });
+      } else if (payload.status === "queued" && !payload.error) {
+        const text = payload.mode === "log" ? "Quedó en la bandeja. El modo registro no entrega el correo." : "Quedó en la bandeja y se enviará en el siguiente proceso.";
+        setNotice({ tone: "ok", text });
+        toast({ title: "Resumen encolado", description: text });
+      } else {
+        throw new Error(payload.error || "No se pudo enviar.");
+      }
+    } catch (error) {
+      const text = error instanceof Error ? error.message : "No se pudo enviar.";
+      setNotice({ tone: "danger", text });
+      toast({ title: "No se pudo enviar", description: text, tone: "danger" });
+    } finally {
+      setSending(false);
+    }
+  }
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent size="lg" title="Correo resumen del comité" description="Copia y pega en Outlook o Gmail: la tabla se mantiene. Este módulo no envía correos.">
+      <DialogContent size="lg" title="Correo resumen del comité" description="Se envía desde tu Gmail. Si no está conectado, sale del buzón compartido. La tabla y las filas en rojo se mantienen.">
         <DialogBody className="space-y-4">
+          {testMode && (
+            <p className="rounded-md bg-amarillo px-3 py-2 text-sm text-ink">Modo de prueba activo. El resumen no llega a los destinatarios: llega a la cuenta que envía.</p>
+          )}
+          {!gmailConnected && <p className="text-xs text-ink-3">Gmail no está conectado en esta cuenta. El envío usa el buzón compartido.</p>}
+          {notice && (
+            <p className={notice.tone === "ok" ? "rounded-md bg-ok-soft px-3 py-2 text-sm text-ok" : "rounded-md bg-danger-soft px-3 py-2 text-sm text-danger"} role="status">
+              {notice.text}
+            </p>
+          )}
           <Field label="Asunto" htmlFor="email-subject">
             <div className="flex gap-2">
               <Input id="email-subject" readOnly value={email.subject} onFocus={(event) => event.currentTarget.select()} />
@@ -61,15 +213,39 @@ export function EmailDialog({ open, onOpenChange, doc, asOf }: { open: boolean; 
               </Button>
             </div>
           </Field>
-          <Field label="Cuerpo del correo" hint="Vista previa de lo que se copia. Las filas en rojo son pendientes con 2 o más comités.">
-            {/* En móvil no hay desplazamiento anidado: la hoja completa desplaza y el pie con "Copiar" queda fijo abajo. */}
-            <div className="email-preview max-h-[48vh] overflow-auto rounded-lg border border-line bg-surface p-4 max-sm:max-h-none max-sm:p-3" dangerouslySetInnerHTML={{ __html: email.html }} />
+          <RecipientFields
+            to={to}
+            cc={cc}
+            onToChange={setTo}
+            onCcChange={setCc}
+            users={users}
+            favorites={favorites}
+            savingFavorite={savingFavorite}
+            onApplyFavorite={(favorite) => {
+              setTo(favorite.to);
+              setCc(favorite.cc);
+            }}
+            onSaveFavorite={saveFavorite}
+            onDeleteFavorite={deleteFavorite}
+          />
+          <Field label="Cuerpo del correo" hint="Puedes editar el resumen. Las filas en rojo son pendientes con 2 o más comités.">
+            <RichTextEditor id="committee-body" value={html} onChange={setHtml} onImageUploaded={(file) => setInlineBytes((current) => current + file.size)} />
           </Field>
+          <AttachmentBar
+            files={files}
+            totalBytes={attachmentBytes}
+            pending={uploading}
+            onAdd={(file) => void addCommitteeFile(file)}
+            onRemove={(id) => void removeCommitteeFile(id)}
+          />
         </DialogBody>
         <DialogFooter>
           <Button variant="secondary" onClick={() => onOpenChange(false)}>Cerrar</Button>
-          <Button onClick={() => copy("body")}>
+          <Button variant="secondary" onClick={() => copy("body")}>
             <Copy /> {copied === "body" ? "Copiado" : "Copiar correo con tabla"}
+          </Button>
+          <Button onClick={() => void send()} disabled={!to.length} loading={sending}>
+            <Send /> Enviar
           </Button>
         </DialogFooter>
       </DialogContent>

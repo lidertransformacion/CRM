@@ -5,11 +5,21 @@ export const DEFAULT_FROM_NAME = "Comercial Libertario";
 
 export type MailMode = "log" | "smtp" | "gmail_api";
 
+export type MailPart = {
+  filename: string;
+  contentType: string;
+  bytes: Uint8Array;
+  contentId?: string;
+  inline?: boolean;
+};
+
 export type OutboundMail = {
   to: string;
+  cc?: string;
   subject: string;
   text: string;
   html?: string;
+  parts?: MailPart[];
   fromAddress: string;
   fromName: string;
 };
@@ -44,18 +54,21 @@ export function textToHtml(text: string): string {
   return `<div style="font-family:Arial,sans-serif;font-size:14px;line-height:1.45;white-space:pre-wrap">${escapeHtml(text)}</div>`;
 }
 
-/** In test mode the message goes to the sender, with the original customer address only in the body. */
+/** In test mode the message goes to the sender. Original To and CC stay in the body only. */
 export function applyTestRedirect(message: OutboundMail, safeTo: string): OutboundMail {
   const original = message.to.trim();
+  const originalCc = message.cc?.trim() ?? "";
   const subject = message.subject.startsWith("[PRUEBA]") ? message.subject : `[PRUEBA] ${message.subject}`;
-  if (original.toLowerCase() === safeTo.trim().toLowerCase()) {
-    return { ...message, to: safeTo.trim(), subject };
+  if (original.toLowerCase() === safeTo.trim().toLowerCase() && !originalCc) {
+    return { ...message, to: safeTo.trim(), cc: undefined, subject };
   }
-  const note = `Modo de prueba. Este correo no se envió al cliente.\nDestinatario original: ${original}\n\n`;
+  const ccLine = originalCc ? `\nCopia original: ${originalCc}` : "";
+  const note = `Modo de prueba. Este correo no se envió al cliente.\nDestinatario original: ${original}${ccLine}\n\n`;
   const text = `${note}${message.text}`;
-  const banner = `<p><strong>Modo de prueba.</strong> Este correo no se envió al cliente.<br>Destinatario original: ${escapeHtml(original)}</p>`;
+  const ccHtml = originalCc ? `<br>Copia original: ${escapeHtml(originalCc)}` : "";
+  const banner = `<p><strong>Modo de prueba.</strong> Este correo no se envió al cliente.<br>Destinatario original: ${escapeHtml(original)}${ccHtml}</p>`;
   const html = message.html ? `${banner}${message.html}` : textToHtml(text);
-  return { ...message, to: safeTo.trim(), subject, text, html };
+  return { ...message, to: safeTo.trim(), cc: undefined, subject, text, html };
 }
 
 export function encodeSubject(subject: string): string {
@@ -71,21 +84,35 @@ function formatAddress(name: string, address: string): string {
   return `${name} <${address}>`;
 }
 
-export function rfc822(message: OutboundMail): string {
-  const headers = [
-    `From: ${formatAddress(message.fromName, message.fromAddress)}`,
-    `To: ${message.to}`,
-    `Subject: ${encodeSubject(message.subject)}`,
-    "MIME-Version: 1.0",
-  ];
-  const text = message.text.replace(/\r?\n/g, "\r\n");
-  if (!message.html) {
-    return [...headers, "Content-Type: text/plain; charset=utf-8", "Content-Transfer-Encoding: 8bit", "", text].join("\r\n");
+function boundaryId(prefix: string): string {
+  return `${prefix}_${crypto.randomUUID().replace(/-/g, "")}`;
+}
+
+function encodeBase64(bytes: Uint8Array): string {
+  let binary = "";
+  const chunk = 0x8000;
+  for (let index = 0; index < bytes.length; index += chunk) {
+    binary += String.fromCharCode(...bytes.subarray(index, index + chunk));
   }
-  const boundary = `crm_${crypto.randomUUID().replace(/-/g, "")}`;
-  const html = message.html.replace(/\r?\n/g, "\r\n");
+  return btoa(binary).replace(/.{1,76}/g, "$&\r\n");
+}
+
+function disposition(kind: "inline" | "attachment", filename: string): string {
+  const ascii = filename.replace(/[\r\n"]/g, "").replace(/[^\x20-\x7e]/g, "_") || "archivo";
+  const star = encodeURIComponent(filename);
+  return `Content-Disposition: ${kind}; filename="${ascii}"; filename*=UTF-8''${star}`;
+}
+
+function wrap(contentType: string, inner: string): string {
+  return [`Content-Type: ${contentType}`, "", inner].join("\r\n");
+}
+
+function alternativeBody(text: string, html: string | undefined): string {
+  if (!html) {
+    return ["Content-Type: text/plain; charset=utf-8", "Content-Transfer-Encoding: 8bit", "", text].join("\r\n");
+  }
+  const boundary = boundaryId("alt");
   return [
-    ...headers,
     `Content-Type: multipart/alternative; boundary="${boundary}"`,
     "",
     `--${boundary}`,
@@ -101,6 +128,43 @@ export function rfc822(message: OutboundMail): string {
     `--${boundary}--`,
     "",
   ].join("\r\n");
+}
+
+function binaryPart(part: MailPart): string {
+  const headers = [
+    `Content-Type: ${part.contentType}; name="${part.filename.replace(/[\r\n"]/g, "")}"`,
+    "Content-Transfer-Encoding: base64",
+    disposition(part.inline ? "inline" : "attachment", part.filename),
+  ];
+  if (part.inline && part.contentId) headers.push(`Content-ID: <${part.contentId}>`);
+  return [...headers, "", encodeBase64(part.bytes)].join("\r\n");
+}
+
+function multipart(kind: "mixed" | "related", children: string[]): string {
+  const boundary = boundaryId(kind === "mixed" ? "mix" : "rel");
+  const body = children.map((child) => `--${boundary}\r\n${child}`).join("\r\n") + `\r\n--${boundary}--\r\n`;
+  return wrap(`multipart/${kind}; boundary="${boundary}"`, body);
+}
+
+export function rfc822(message: OutboundMail): string {
+  const headers = [
+    `From: ${formatAddress(message.fromName, message.fromAddress)}`,
+    `To: ${message.to}`,
+    ...(message.cc?.trim() ? [`Cc: ${message.cc.trim()}`] : []),
+    `Subject: ${encodeSubject(message.subject)}`,
+    "MIME-Version: 1.0",
+  ];
+  const text = message.text.replace(/\r?\n/g, "\r\n");
+  const html = message.html?.replace(/\r?\n/g, "\r\n");
+  const inlines = (message.parts ?? []).filter((part) => part.inline);
+  const files = (message.parts ?? []).filter((part) => !part.inline);
+  let body = alternativeBody(text, html);
+  if (inlines.length) body = multipart("related", [body, ...inlines.map(binaryPart)]);
+  if (files.length) body = multipart("mixed", [body, ...files.map(binaryPart)]);
+  if (!html && !inlines.length && !files.length) {
+    body = ["Content-Type: text/plain; charset=utf-8", "Content-Transfer-Encoding: 8bit", "", text].join("\r\n");
+  }
+  return [...headers, body].join("\r\n");
 }
 
 export function base64Url(value: string): string {

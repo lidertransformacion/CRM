@@ -98,12 +98,12 @@ Binding: D1 database `crm-pay-line` as `DB`.
 
 ## What is on screen
 
-- **Comités** — Comité Out of Stores. History, filters, and a copyable summary.
+- **Comités** — Comité Out of Stores. History, filters, and a summary you can send or copy. See [docs/committee-mail.md](docs/committee-mail.md).
 - **Pay Line** — Kanban of the Odoo lead export. Cards with no expected revenue say “Sin ingreso”.
 - **KPIs** — Open, won, and lost follow Odoo `active` and won/lost status, not the stage alone. On the 15 Oct 2026 export: 169 open, 182 won, 309 lost, 39 recurrente.
 - **Comodatos** — 224 machines. **Ver diff** plans against the bundled CSV while sync is off. **Traer de la hoja** and **Enviar cambios** write only when `SHEETS_SYNC_ENABLED=true`. The sheet is the source on pull. Rows are matched by serial and never deleted.
 - **Clientes** — Timeline of opportunities, activities, committee items, and comodatos.
-- **Correos** — Spanish drafts you can copy or queue. **Procesar bandeja** follows `MAIL_MODE`. A user with Gmail connected on **Cuenta** sends as that account. Otherwise production `gmail_api` uses the shared mailbox. Test mode (the default) does not deliver to the customer. `log` leaves the message queued.
+- **Correos** — Spanish drafts with a rich editor, inline images, and attachments. **Procesar bandeja** follows `MAIL_MODE`. A user with Gmail connected on **Cuenta** sends as that account. Otherwise production `gmail_api` uses the shared mailbox. Test mode (the default) does not deliver to the customer. `log` leaves the message queued. See [docs/rich-mail.md](docs/rich-mail.md).
 - **Ajustes** — Admins create users.
 - **Cuenta** — Password change and **Conectar Gmail**.
 
