@@ -15,6 +15,7 @@
     "test": "vitest run",
     "import:odoo": "tsx scripts/import-odoo.ts",
     "seed": "tsx scripts/seed.ts",
+    "seed:visits": "tsx scripts/seed-visit-points.ts",
     "reset-password": "tsx scripts/reset-password.ts"
   },
   "dependencies": {

@@ -21,7 +21,7 @@ export function BottomNav({ onMore, moreOpen }: { onMore: () => void; moreOpen: 
   return (
     <nav
       aria-label="Secciones"
-      className="fixed inset-x-0 bottom-0 z-30 border-t border-line-2 bg-surface/95 pb-[env(safe-area-inset-bottom)] backdrop-blur lg:hidden"
+      className="fixed inset-x-0 bottom-0 z-30 border-t border-line-2 bg-surface/95 pb-[env(safe-area-inset-bottom)] backdrop-blur print:hidden lg:hidden"
     >
       <ul className="grid grid-cols-5">
         {items.map((item) => {

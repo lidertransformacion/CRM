@@ -80,7 +80,7 @@ Set these only when the matching feature is turned on:
 
 Set or rotate one with `npx wrangler secret put <NAME>` from a trusted machine. The command prompts for the value.
 
-Per-user Gmail also needs the D1 migration `migrations/0002_gmail_tokens.sql` on `crm-pay-line` before connect is used:
+Per-user Gmail also needs the D1 migration `migrations/0002_gmail_tokens.sql` on `crm-pay-line` before connect is used. Visits and removing a team member need `migrations/0003_users_soft_delete.sql` and `migrations/0004_visits.sql`. The exact statements and the optional `VISIT_PHOTOS` R2 binding are in [visits.md](visits.md). There is no new secret. `MAIL_TEST_MODE` stays as it is.
 
 ```bash
 npx wrangler d1 migrations apply crm-pay-line --remote

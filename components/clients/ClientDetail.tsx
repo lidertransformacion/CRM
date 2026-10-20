@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import Link from "next/link";
-import { Mail, SquareKanban, Users } from "lucide-react";
+import { Mail, MapPinned, SquareKanban, Users } from "lucide-react";
 import { cop } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
@@ -72,6 +72,9 @@ export function ClientDetail({
           <>
             <Button variant="secondary" size="sm" asChild>
               <Link href={`/pipeline?q=${encodeURIComponent(customer)}`}><SquareKanban />Ver en pipeline</Link>
+            </Button>
+            <Button size="sm" variant="secondary" asChild>
+              <Link href={`/visitas?q=${encodeURIComponent(customer)}`}><MapPinned />Visitas</Link>
             </Button>
             <Button size="sm" asChild>
               <Link href={mailHref}><Mail />Redactar correo</Link>
