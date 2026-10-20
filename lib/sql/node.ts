@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { ALTERS, SCHEMA } from "@/lib/schema";
+import { ALTERS, COMMERCIAL_ROLE_SQL, SCHEMA } from "@/lib/schema";
 import type { SqlDb } from "@/lib/sql/types";
 
 function applySync(db: DatabaseSync) {
@@ -19,6 +19,7 @@ function applySync(db: DatabaseSync) {
   } catch {
     // Index already declared in SCHEMA.
   }
+  db.exec(COMMERCIAL_ROLE_SQL);
 }
 
 export function openDatabaseSync(file: string): DatabaseSync {

@@ -19,6 +19,12 @@
       "migrations_dir": "migrations"
     }
   ],
+  "r2_buckets": [
+    {
+      "binding": "LEGAL_FILES",
+      "bucket_name": "crm-legal-files"
+    }
+  ],
   "triggers": {
     "crons": ["*/5 * * * *"]
   },

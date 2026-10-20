@@ -4,7 +4,9 @@ import { redirect } from "next/navigation";
 import { Lock } from "lucide-react";
 import { UserAdmin } from "@/components/auth/UserAdmin";
 import { LinkButton } from "@/components/home/LinkButton";
-import { Card } from "@/components/ui/card";
+import { StorageBar } from "@/components/storage/StorageBar";
+import { readUsage } from "@/lib/storage/quota";
+import { Card, CardBody, CardHeader } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { PageHeader } from "@/components/ui/page-header";
 import { SESSION_COOKIE, verifySession } from "@/lib/auth/session";
@@ -39,14 +41,26 @@ export default async function AjustesPage() {
       </div>
     );
   }
-  const users = await listUsers(await getDb());
+  const db = await getDb();
+  const [users, usage] = await Promise.all([listUsers(db), readUsage(db)]);
   return (
     <div className="page">
       <PageHeader
         eyebrow="Administración"
         title="Usuarios"
         description="Solo se aceptan correos que terminan exactamente en @libertariocoffee.com. Cada cuenta nueva entra obligada a cambiar la contraseña."
+        actions={
+          <LinkButton href="/ajustes/almacen" variant="secondary">
+            Almacén
+          </LinkButton>
+        }
       />
+      <Card className="mb-4">
+        <CardHeader title="Almacén" description="Contratos, correos y fotos de visitas comparten 10 GB." />
+        <CardBody>
+          <StorageBar bytesUsed={usage.bytesUsed} limitBytes={usage.limitBytes} />
+        </CardBody>
+      </Card>
       <UserAdmin
         currentEmail={session.email}
         initial={users.map((user) => ({

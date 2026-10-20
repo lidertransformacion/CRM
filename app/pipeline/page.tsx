@@ -1,16 +1,18 @@
 import { Suspense } from "react";
 import { PipelineBoard } from "@/components/pipeline/PipelineBoard";
 import { Skeleton } from "@/components/ui/skeleton";
+import { can } from "@/lib/auth/permissions";
+import { requirePageUser } from "@/lib/auth/page-session";
 import { listLeads } from "@/lib/db";
 import { todayIso } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
 
 export default async function PipelinePage() {
-  const leads = await listLeads();
+  const [leads, session] = await Promise.all([listLeads(), requirePageUser("/pipeline")]);
   return (
     <Suspense fallback={<PipelineSkeleton />}>
-      <PipelineBoard initial={leads} today={todayIso()} />
+      <PipelineBoard initial={leads} today={todayIso()} canUploadContract={can(session.role, "upload_contract")} />
     </Suspense>
   );
 }

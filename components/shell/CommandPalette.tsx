@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { Command } from "cmdk";
 import { Coffee, Search, SquareKanban, Users } from "lucide-react";
 import * as DialogPrimitive from "@radix-ui/react-dialog";
-import { NAV } from "@/components/shell/nav";
+import { NAV, type NavItem } from "@/components/shell/nav";
 import { Kbd } from "@/components/ui/kbd";
 
 type Results = {
@@ -17,7 +17,7 @@ type Results = {
 const EMPTY: Results = { leads: [], equipment: [], clients: [] };
 
 /** Buscador global (⌘K): navega a secciones y encuentra clientes, equipos y oportunidades. */
-export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
+export function CommandPalette({ open, onOpenChange, sections: sectionItems = NAV }: { open: boolean; onOpenChange: (open: boolean) => void; sections?: NavItem[] }) {
   const router = useRouter();
   const [query, setQuery] = React.useState("");
   const [results, setResults] = React.useState<Results>(EMPTY);
@@ -60,7 +60,7 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
   }
 
   const needle = query.trim().toLowerCase();
-  const sections = NAV.filter((item) => !needle || item.label.toLowerCase().includes(needle) || item.description.toLowerCase().includes(needle));
+  const sections = sectionItems.filter((item) => !needle || item.label.toLowerCase().includes(needle) || item.description.toLowerCase().includes(needle));
   const nothing = !loading && sections.length === 0 && results.leads.length === 0 && results.equipment.length === 0 && results.clients.length === 0;
 
   return (

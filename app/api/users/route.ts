@@ -28,7 +28,7 @@ export async function POST(request: Request) {
   try {
     const db = await getDb();
     const session = await requireSession(request, db);
-    const body = (await request.json()) as { email?: string; password?: string; role?: "admin" | "user" };
+    const body = (await request.json()) as { email?: string; password?: string; role?: string };
     const user = await createUser(db, session, {
       email: body.email ?? "",
       password: body.password ?? "",

@@ -42,6 +42,8 @@ The build image defaults to Node.js 24. This repository's `.nvmrc` is `22.14.0`,
 | `MAIL_MODE` | `gmail_api` |
 | `SHEETS_SYNC_ENABLED` | `false` |
 | Cron | `*/5 * * * *` |
+| R2 binding | `LEGAL_FILES` |
+| R2 bucket | `crm-legal-files` (exists). Shared 10 GB cap with `MAIL_FILES` and `VISIT_PHOTOS` when those bindings exist. |
 
 These plain vars are also committed: `MAIL_FROM_ADDRESS`, `MAIL_FROM_NAME`, `GOOGLE_SHEETS_SPREADSHEET_ID`, `GOOGLE_SHEETS_TAB`, and `BOOTSTRAP_ADMIN_EMAIL`.
 

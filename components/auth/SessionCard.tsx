@@ -8,7 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardBody, CardFooter, CardHeader } from "@/components/ui/card";
 import { useToast } from "@/components/ui/toast";
-import type { Role } from "@/lib/auth/session";
+import type { Role } from "@/lib/auth/roles";
 
 /** Quién está en sesión y el botón para cerrarla (en móvil es el sitio natural para salir). */
 export function SessionCard({ email, role }: { email: string; role: Role }) {

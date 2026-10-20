@@ -11,11 +11,10 @@ import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Table, TBody, TD, TH, THead, TR } from "@/components/ui/table";
 import { useToast } from "@/components/ui/toast";
-import type { Role } from "@/lib/auth/session";
+import { ROLE_LABEL } from "@/lib/auth/permissions";
+import type { Role } from "@/lib/auth/roles";
 
 type User = { id: number; email: string; role: Role; mustChangePassword: boolean };
-
-const ROLE_LABEL: Record<Role, string> = { admin: "Administrador", user: "Usuario" };
 
 /**
  * Administración de usuarios: crear, restablecer contraseña y ver quién tiene acceso.
@@ -26,7 +25,7 @@ export function UserAdmin({ initial, currentEmail }: { initial: User[]; currentE
   const [users, setUsers] = useState(initial);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [role, setRole] = useState<Role>("user");
+  const [role, setRole] = useState<Role>("comercial");
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
   const [resetEmail, setResetEmail] = useState("");
@@ -54,7 +53,7 @@ export function UserAdmin({ initial, currentEmail }: { initial: User[]; currentE
       setUsers((rows) => [...rows, { ...created, mustChangePassword: true }].sort((a, b) => a.email.localeCompare(b.email)));
       setEmail("");
       setPassword("");
-      setRole("user");
+      setRole("comercial");
       toast({ title: "Usuario creado", description: `${created.email} entra con la contraseña inicial y debe cambiarla.`, tone: "ok" });
     } catch {
       setError("Sin conexión. Inténtalo de nuevo.");
@@ -123,7 +122,9 @@ export function UserAdmin({ initial, currentEmail }: { initial: User[]; currentE
               </Field>
               <Field label="Rol" htmlFor="new-role">
                 <Select id="new-role" value={role} onChange={(event) => setRole(event.target.value as Role)}>
-                  <option value="user">Usuario</option>
+                  <option value="comercial">Comercial</option>
+                  <option value="legal">Legal</option>
+                  <option value="gerencia">Gerencia</option>
                   <option value="admin">Administrador</option>
                 </Select>
               </Field>

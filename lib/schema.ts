@@ -244,10 +244,159 @@ CREATE INDEX IF NOT EXISTS email_outbox_status_next ON email_outbox(status, next
 CREATE INDEX IF NOT EXISTS odoo_outbound_status ON odoo_outbound(status);
 CREATE INDEX IF NOT EXISTS committee_docs_current ON committee_docs(is_current);
 CREATE INDEX IF NOT EXISTS committee_docs_number ON committee_docs(number);
+
+CREATE TABLE IF NOT EXISTS folders (
+  id INTEGER PRIMARY KEY,
+  parent_id INTEGER,
+  name TEXT NOT NULL,
+  created_by INTEGER NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  deleted_at TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS folders_parent_name ON folders(IFNULL(parent_id, 0), name) WHERE deleted_at IS NULL;
+CREATE TABLE IF NOT EXISTS files (
+  id INTEGER PRIMARY KEY,
+  folder_id INTEGER,
+  name TEXT NOT NULL,
+  r2_key TEXT NOT NULL UNIQUE,
+  mime TEXT NOT NULL,
+  size_bytes INTEGER NOT NULL,
+  sha256 TEXT NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'upload',
+  created_by INTEGER NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  deleted_at TEXT
+);
+CREATE INDEX IF NOT EXISTS files_folder ON files(folder_id, deleted_at);
+CREATE TABLE IF NOT EXISTS contracts (
+  id INTEGER PRIMARY KEY,
+  code TEXT UNIQUE,
+  title TEXT NOT NULL,
+  type TEXT NOT NULL,
+  counterparty_name TEXT,
+  counterparty_nit TEXT,
+  country TEXT NOT NULL DEFAULT 'CO',
+  status TEXT NOT NULL DEFAULT 'draft',
+  current_file_id INTEGER,
+  start_date TEXT,
+  end_date TEXT,
+  renewal_notice_days INTEGER,
+  value_cop INTEGER,
+  owner_id INTEGER NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS contracts_owner ON contracts(owner_id);
+CREATE INDEX IF NOT EXISTS contracts_end ON contracts(end_date);
+CREATE TABLE IF NOT EXISTS contract_links (
+  id INTEGER PRIMARY KEY,
+  contract_id INTEGER NOT NULL,
+  target_type TEXT NOT NULL CHECK (target_type IN ('lead', 'equipment')),
+  target_key TEXT NOT NULL,
+  created_by INTEGER NOT NULL,
+  created_at TEXT NOT NULL,
+  UNIQUE (contract_id, target_type, target_key)
+);
+CREATE INDEX IF NOT EXISTS contract_links_target ON contract_links(target_type, target_key);
+CREATE TABLE IF NOT EXISTS contract_novedades (
+  id INTEGER PRIMARY KEY,
+  contract_id INTEGER NOT NULL,
+  kind TEXT NOT NULL,
+  body TEXT NOT NULL,
+  file_id INTEGER,
+  due_date TEXT,
+  created_by INTEGER NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS contract_novedades_contract ON contract_novedades(contract_id, created_at);
+CREATE TABLE IF NOT EXISTS contract_signers (
+  id INTEGER PRIMARY KEY,
+  contract_id INTEGER NOT NULL,
+  step_order INTEGER NOT NULL,
+  role TEXT NOT NULL CHECK (role IN ('comercial', 'legal', 'gerencia', 'externo')),
+  signer_user_id INTEGER,
+  signer_email TEXT NOT NULL,
+  signer_name TEXT,
+  created_at TEXT NOT NULL,
+  UNIQUE (contract_id, step_order)
+);
+CREATE INDEX IF NOT EXISTS contract_signers_contract ON contract_signers(contract_id, step_order);
+CREATE TABLE IF NOT EXISTS signature_requests (
+  id INTEGER PRIMARY KEY,
+  public_id TEXT NOT NULL UNIQUE,
+  contract_id INTEGER NOT NULL,
+  source_file_id INTEGER NOT NULL,
+  source_sha256 TEXT NOT NULL,
+  status TEXT NOT NULL,
+  current_step INTEGER NOT NULL DEFAULT 1,
+  final_file_id INTEGER,
+  final_sha256 TEXT,
+  created_by INTEGER NOT NULL,
+  created_at TEXT NOT NULL,
+  completed_at TEXT
+);
+CREATE TABLE IF NOT EXISTS signature_steps (
+  id INTEGER PRIMARY KEY,
+  request_id INTEGER NOT NULL,
+  step_order INTEGER NOT NULL,
+  role TEXT NOT NULL,
+  signer_user_id INTEGER,
+  signer_email TEXT NOT NULL,
+  signer_name TEXT,
+  status TEXT NOT NULL DEFAULT 'waiting',
+  otp_hash TEXT,
+  otp_expires_at TEXT,
+  otp_attempts INTEGER NOT NULL DEFAULT 0,
+  input_sha256 TEXT,
+  output_sha256 TEXT,
+  signature_image_key TEXT,
+  signed_at TEXT,
+  ip TEXT,
+  user_agent TEXT,
+  comment TEXT,
+  token_hash TEXT,
+  UNIQUE (request_id, step_order)
+);
+CREATE TABLE IF NOT EXISTS audit_events (
+  id INTEGER PRIMARY KEY,
+  entity_type TEXT NOT NULL,
+  entity_id INTEGER NOT NULL,
+  action TEXT NOT NULL,
+  actor_user_id INTEGER,
+  actor_email TEXT,
+  ip TEXT,
+  user_agent TEXT,
+  data_json TEXT,
+  prev_hash TEXT,
+  hash TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS audit_entity ON audit_events(entity_type, entity_id);
+CREATE TABLE IF NOT EXISTS notifications (
+  id INTEGER PRIMARY KEY,
+  user_id INTEGER NOT NULL,
+  kind TEXT NOT NULL,
+  title TEXT NOT NULL,
+  link TEXT,
+  read_at TEXT,
+  outbox_id INTEGER,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS notifications_user ON notifications(user_id, read_at);
+CREATE TABLE IF NOT EXISTS storage_usage (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  bytes_used INTEGER NOT NULL DEFAULT 0,
+  updated_at TEXT NOT NULL
+);
 `;
 
 /** Bump when SCHEMA gains indexes or columns so an existing D1 applies them once. */
-export const SCHEMA_VERSION = "4";
+export const SCHEMA_VERSION = "6";
+
+/** One-time role rename. Safe to run more than once. */
+export const COMMERCIAL_ROLE_SQL = "UPDATE users SET role = 'comercial' WHERE role = 'user'";
 
 /** Applied when an older local file is missing columns added after the first release. */
 export const ALTERS = [

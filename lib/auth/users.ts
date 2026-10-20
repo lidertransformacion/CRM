@@ -1,6 +1,6 @@
 import { BOOTSTRAP_ADMIN_EMAIL, isLibertarioEmail, normalizeEmail } from "@/lib/auth/email";
 import { hashPassword, verifyPassword } from "@/lib/auth/password";
-import type { Role } from "@/lib/auth/session";
+import { normalizeRole, type Role } from "@/lib/auth/session";
 import { readEnv } from "@/lib/env";
 import type { SqlDb } from "@/lib/sql/types";
 
@@ -65,13 +65,19 @@ export async function authenticate(db: SqlDb, email: string, password: string): 
   if (!user || !(await verifyPassword(normalizePassword(password), user.password_hash))) {
     throw new HttpError(401, "Correo o contraseña incorrectos.");
   }
-  return user;
+  return { ...user, role: normalizeRole(user.role) };
+}
+
+export function parseAssignableRole(value: unknown): Role {
+  if (value == null || value === "" || value === "user") return "comercial";
+  if (value === "admin" || value === "comercial" || value === "legal" || value === "gerencia") return value;
+  throw new HttpError(400, "Elige un rol: administrador, comercial, legal o gerencia.");
 }
 
 export async function createUser(
   db: SqlDb,
   actor: { role: Role },
-  input: { email: string; password: string; role?: Role },
+  input: { email: string; password: string; role?: unknown },
 ): Promise<{ id: number; email: string; role: Role }> {
   if (actor.role !== "admin") throw new HttpError(403, "Solo un administrador puede crear usuarios.");
   const email = normalizeEmail(input.email ?? "");
@@ -80,7 +86,7 @@ export async function createUser(
   }
   const password = normalizePassword(input.password ?? "");
   assertPassword(password);
-  const role: Role = input.role === "admin" ? "admin" : "user";
+  const role = parseAssignableRole(input.role);
   const now = new Date().toISOString();
   try {
     const result = await db.run(
@@ -143,14 +149,16 @@ export async function setEmailOptOut(db: SqlDb, userId: number, optOut: boolean)
 }
 
 export async function listUsers(db: SqlDb): Promise<Omit<UserRow, "password_hash">[]> {
-  return db.all(
+  const rows = await db.all<Omit<UserRow, "password_hash"> & { role: string }>(
     `SELECT id, email, role, must_change_password, email_opt_out, session_version, created_at, updated_at
      FROM users ORDER BY email`,
   );
+  return rows.map((row) => ({ ...row, role: normalizeRole(row.role) }));
 }
 
 export async function userById(db: SqlDb, id: number): Promise<UserRow | undefined> {
-  return db.get<UserRow>("SELECT * FROM users WHERE id = ?", [id]);
+  const row = await db.get<UserRow & { role: string }>("SELECT * FROM users WHERE id = ?", [id]);
+  return row ? { ...row, role: normalizeRole(row.role) } : undefined;
 }
 
 export async function recipientOptedOut(db: SqlDb, email: string): Promise<boolean> {
