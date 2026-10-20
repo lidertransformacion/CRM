@@ -6,6 +6,7 @@ import type { SqlDb } from "@/lib/sql/types";
 
 export type DeliverInput = {
   to: string;
+  cc?: string;
   subject: string;
   text: string;
   html?: string;
@@ -31,6 +32,7 @@ export async function deliverMail(input: DeliverInput, fetchImpl: typeof fetch =
   const shared = await fromIdentity();
   const message: OutboundMail = {
     to: input.to,
+    cc: input.cc?.trim() || undefined,
     subject: input.subject,
     text: input.text,
     html: input.html,

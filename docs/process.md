@@ -26,7 +26,7 @@ Overdue means the item is still open and `dueOn` is strictly before today. On 15
 
 Closed topics sit under TEMAS CERRADOS. With “ver cerrados” off, closed-only puntos are hidden, which leaves 9 visible actas out of 20.
 
-The summary email subject is `Comité Out of Stores · 14 oct · Decisiones y pendientes`, signed Andrea. “Cerrado desde el último comité” is the 11 items tagged as closed in comité 7. Per-person tables sort by carry descending, then due date ascending. The clipboard copy includes HTML and plain text. An empty Don Eloy title is written once as `(Don Eloy)`.
+The summary email subject is `Comité Out of Stores · 14 oct · Decisiones y pendientes`, signed Andrea. “Cerrado desde el último comité” is the 11 items tagged as closed in comité 7. Per-person tables sort by carry descending, then due date ascending. The clipboard copy includes HTML and plain text. **Enviar** sends that same HTML, including the red rows, through the mail outbox. See [committee-mail.md](committee-mail.md). An empty Don Eloy title is written once as `(Don Eloy)`.
 
 Person chips use open-item counts. Unassigned items stay in “Sin responsable”, which is always last in the email. Owners can be added beyond the seed list. A punto or pendiente can store a link to a CRM lead; the link is local text plus an optional lead key.
 
