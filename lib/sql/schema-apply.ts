@@ -1,4 +1,4 @@
-import { ALTERS, SCHEMA, SCHEMA_VERSION, splitSql } from "@/lib/schema";
+import { ALTERS, COMMERCIAL_ROLE_SQL, SCHEMA, SCHEMA_VERSION, splitSql } from "@/lib/schema";
 import type { SqlDb } from "@/lib/sql/types";
 
 async function schemaVersion(db: SqlDb): Promise<string | null> {
@@ -25,6 +25,7 @@ export async function applySchema(db: SqlDb): Promise<void> {
       // Already present.
     }
   }
+  await db.exec(COMMERCIAL_ROLE_SQL);
   await db.run("INSERT INTO app_settings (key, value) VALUES ('schema_version', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", [
     SCHEMA_VERSION,
   ]);

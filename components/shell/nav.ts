@@ -1,7 +1,8 @@
 import type { LucideIcon } from "lucide-react";
-import { ChartBar, ClipboardList, Coffee, LayoutDashboard, Mail, MapPinned, SquareKanban, Users } from "lucide-react";
+import { Briefcase, ChartBar, ClipboardList, Coffee, Folder, LayoutDashboard, Mail, MapPinned, SquareKanban, Users } from "lucide-react";
+import { normalizeRole, type Role } from "@/lib/auth/roles";
 
-export type NavItem = { href: string; label: string; description: string; icon: LucideIcon; exact?: boolean };
+export type NavItem = { href: string; label: string; description: string; icon: LucideIcon; exact?: boolean; roles?: Role[] };
 
 /** Secciones de la app. El orden es el de uso diario: primero el resumen, luego lo operativo. */
 export const NAV: NavItem[] = [
@@ -13,7 +14,14 @@ export const NAV: NavItem[] = [
   { href: "/clientes", label: "Clientes", description: "Historia completa de cada cliente", icon: Users },
   { href: "/visitas", label: "Visitas", description: "Reportes de visita y cobertura semanal", icon: MapPinned },
   { href: "/correos", label: "Correos", description: "Borradores listos para copiar", icon: Mail },
+  { href: "/legal", label: "Contratos", description: "Archivos, contratos y novedades", icon: Folder },
+  { href: "/gerencia", label: "Gerencia", description: "Vista de dirección", icon: Briefcase, roles: ["admin", "gerencia"] },
 ];
+
+export function navItems(role: string | null | undefined): NavItem[] {
+  const normalized = role ? normalizeRole(role) : null;
+  return NAV.filter((item) => !item.roles || (normalized != null && item.roles.includes(normalized)));
+}
 
 export function isActive(pathname: string, item: NavItem): boolean {
   if (item.exact) return pathname === item.href;

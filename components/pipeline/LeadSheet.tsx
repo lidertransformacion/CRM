@@ -15,6 +15,7 @@ import { Select } from "@/components/ui/select";
 import { Sheet, SheetBody, SheetContent, SheetFooter } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
 import { fullDate, GROUP_META, isOverdue, stageGroup, stageShort } from "@/components/pipeline/stage-meta";
+import { LinkedContracts } from "@/components/legal/LinkedContracts";
 
 /**
  * Panel lateral de una oportunidad: cambia la etapa sin arrastrar (funciona en el celular),
@@ -27,6 +28,7 @@ export function LeadSheet({
   today,
   saving,
   onMove,
+  canUploadContract = false,
 }: {
   lead: LeadRecord | null;
   open: boolean;
@@ -34,6 +36,7 @@ export function LeadSheet({
   today: string;
   saving: boolean;
   onMove: (importKey: string, stage: string) => Promise<boolean>;
+  canUploadContract?: boolean;
 }) {
   const key = lead?.import_key ?? null;
   const [activities, setActivities] = React.useState<ActivityRecord[] | null>(null);
@@ -153,6 +156,8 @@ export function LeadSheet({
               {!!shown.edited_locally && <Item label="Origen del dato" wide value={<Badge tone="warn" size="sm">Cambiada aquí · distinta de Odoo</Badge>} />}
             </dl>
           </FieldSection>
+
+          <LinkedContracts targetType="lead" targetKey={shown.import_key} canUpload={canUploadContract} />
 
           <FieldSection title={activities ? `Actividades (${activities.length})` : "Actividades"} description="Las que trae el export de Odoo para esta oportunidad.">
             {activities === null ? (

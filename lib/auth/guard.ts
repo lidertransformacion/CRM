@@ -1,7 +1,7 @@
 import { userById, HttpError } from "@/lib/auth/users";
 import { readEnv } from "@/lib/env";
 import { safeEqual } from "@/lib/auth/password";
-import { readSessionFromRequest, type SessionPayload } from "@/lib/auth/session";
+import { normalizeRole, readSessionFromRequest, type SessionPayload } from "@/lib/auth/session";
 import type { SqlDb } from "@/lib/sql/types";
 
 export function isPublicPath(pathname: string): boolean {
@@ -72,7 +72,7 @@ export async function requireSession(request: Request, db: SqlDb): Promise<Sessi
   return {
     uid: user.id,
     email: user.email,
-    role: user.role,
+    role: normalizeRole(user.role),
     mustChangePassword: user.must_change_password === 1,
     sv: user.session_version,
     exp: session.exp,

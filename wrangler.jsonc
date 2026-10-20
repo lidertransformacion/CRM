@@ -23,6 +23,10 @@
     {
       "binding": "MAIL_FILES",
       "bucket_name": "crm-libertario-mail"
+    },
+    {
+      "binding": "LEGAL_FILES",
+      "bucket_name": "crm-legal-files"
     }
   ],
   "triggers": {

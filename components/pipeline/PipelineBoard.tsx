@@ -28,7 +28,7 @@ const VIEW_STORAGE = "crm.pipeline.view";
  * La oportunidad abierta vive en la URL (`?lead=`) para que ⌘K, Inicio y Clientes puedan enlazarla.
  * En el celular los selects y chips de filtro van en un diálogo "Filtros" y el resumen queda en 2 × 2.
  */
-export function PipelineBoard({ initial, today }: { initial: LeadRecord[]; today: string }) {
+export function PipelineBoard({ initial, today, canUploadContract = false }: { initial: LeadRecord[]; today: string; canUploadContract?: boolean }) {
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const { toast } = useToast();
@@ -314,7 +314,7 @@ export function PipelineBoard({ initial, today }: { initial: LeadRecord[]; today
         <LeadTable leads={visible} today={today} selectedKey={selectedKey} onOpen={setLeadParam} />
       )}
 
-      <LeadSheet lead={selected} open={!!selected} onOpenChange={(open) => !open && setLeadParam(null)} today={today} saving={savingKey === selected?.import_key} onMove={move} />
+      <LeadSheet lead={selected} open={!!selected} onOpenChange={(open) => !open && setLeadParam(null)} today={today} saving={savingKey === selected?.import_key} onMove={move} canUploadContract={canUploadContract} />
 
       {/* Filtros del celular (hoja inferior). En escritorio los mismos controles están en la Toolbar. */}
       <Dialog open={filtersOpen} onOpenChange={setFiltersOpen}>

@@ -4,6 +4,8 @@ declare module "cloudflare:workers" {
     /** Mail attachments and inline images. Bucket crm-libertario-mail. */
     MAIL_FILES?: MailObjectBucket;
     APP_KV?: KVNamespace;
+    /** Private contract PDFs. Bucket `crm-legal-files`. Create it before deploy. */
+    LEGAL_FILES?: LegalObjectBucket;
     /** OAuth web client id. Worker secret. Never commit a value. */
     GOOGLE_CLIENT_ID?: string;
     /** OAuth web client secret. Worker secret. Never commit a value. */
@@ -52,4 +54,21 @@ interface KVNamespace {
   get(key: string): Promise<string | null>;
   put(key: string, value: string, options?: { expirationTtl?: number }): Promise<void>;
   delete(key: string): Promise<void>;
+}
+
+interface LegalObjectBucket {
+  put(
+    key: string,
+    value: ArrayBuffer | Uint8Array | string,
+    options?: { httpMetadata?: { contentType?: string } },
+  ): Promise<unknown>;
+  get(key: string): Promise<LegalStoredObject | null>;
+  delete(key: string): Promise<void>;
+}
+
+interface LegalStoredObject {
+  body: ReadableStream;
+  size?: number;
+  httpMetadata?: { contentType?: string };
+  arrayBuffer(): Promise<ArrayBuffer>;
 }

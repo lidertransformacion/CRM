@@ -12,9 +12,11 @@ import { LogoMark } from "@/components/shell/LogoMark";
 import { CommandPaletteContext } from "@/components/shell/command-palette-context";
 import { NavigationProgress } from "@/components/shell/NavigationProgress";
 import { BottomNav } from "@/components/shell/BottomNav";
-import { NAV, currentSection, isActive } from "@/components/shell/nav";
+import { currentSection, isActive, navItems } from "@/components/shell/nav";
+import type { Role } from "@/lib/auth/roles";
+import { ROLE_LABEL } from "@/lib/auth/permissions";
 
-export type ShellUser = { email: string; role: "admin" | "user" } | null;
+export type ShellUser = { email: string; role: Role } | null;
 
 export function AppShell({ children, user = null }: { children: React.ReactNode; user?: ShellUser }) {
   const pathname = usePathname();
@@ -35,6 +37,7 @@ export function AppShell({ children, user = null }: { children: React.ReactNode;
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
+  const items = navItems(user?.role);
   const palette = React.useMemo(
     () => ({
       open: () => setPaletteOpen(true),
@@ -60,7 +63,7 @@ export function AppShell({ children, user = null }: { children: React.ReactNode;
           aria-label="Navegación principal"
         >
           <Brand />
-          <SidebarNav pathname={pathname} user={user} />
+          <SidebarNav pathname={pathname} user={user} items={items} />
           <SidebarFooter user={user} />
         </aside>
 
@@ -109,13 +112,13 @@ export function AppShell({ children, user = null }: { children: React.ReactNode;
         <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
           <SheetContent side="left" size="sm" title={<BrandLockup />} description="Menú" className="[&_[data-slot=description]]:sr-only">
             <SheetBody className="px-0 py-2">
-              <SidebarNav pathname={pathname} user={user} />
+              <SidebarNav pathname={pathname} user={user} items={items} />
             </SheetBody>
             <SidebarFooter user={user} />
           </SheetContent>
         </Sheet>
 
-        <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
+        <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} sections={items} />
       </div>
     </CommandPaletteContext.Provider>
   );
@@ -142,16 +145,15 @@ function Brand() {
   );
 }
 
-function SidebarNav({ pathname, user }: { pathname: string; user: ShellUser }) {
+function SidebarNav({ pathname, user, items }: { pathname: string; user: ShellUser; items: ReturnType<typeof navItems> }) {
   const settingsActive = pathname === "/ajustes";
   return (
     <nav className="flex-1 space-y-0.5 overflow-y-auto px-2.5 py-2.5">
-      {NAV.map((item) => (
+      {items.map((item) => (
         <NavRow key={item.href} href={item.href} icon={item.icon} label={item.label} description={item.description} active={isActive(pathname, item)} />
       ))}
-      {/* Siempre visible: la página de Ajustes ya bloquea a quien no sea administrador. */}
       <div className="mt-3.5 border-t border-line-2 pt-2">
-        <NavRow href="/ajustes" icon={Settings} label="Ajustes" description={user?.role === "user" ? "Solo administradores" : "Usuarios y contraseñas"} active={settingsActive} />
+        <NavRow href="/ajustes" icon={Settings} label="Ajustes" description={user?.role === "admin" ? "Crear usuarios y contraseñas" : "Solo administradores"} active={settingsActive} />
       </div>
     </nav>
   );
@@ -175,8 +177,6 @@ function NavRow({ href, icon, label, description, active }: { href: string; icon
     </Link>
   );
 }
-
-const ROLE_LABEL = { admin: "Administrador", user: "Comercial" } as const;
 
 /** Nombre legible a partir del correo: "juan.perez@…" → "Juan Perez". */
 const KNOWN_NAMES: Record<string, string> = { lidertransformacion: "Transformación Digital" };
