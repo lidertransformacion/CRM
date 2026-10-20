@@ -172,8 +172,18 @@ CREATE TABLE IF NOT EXISTS users (
   must_change_password INTEGER NOT NULL DEFAULT 0,
   email_opt_out INTEGER NOT NULL DEFAULT 0,
   session_version INTEGER NOT NULL DEFAULT 1,
+  active INTEGER NOT NULL DEFAULT 1,
+  deleted_at TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS user_events (
+  id INTEGER PRIMARY KEY,
+  at TEXT NOT NULL,
+  actor_user_id INTEGER,
+  action TEXT NOT NULL,
+  target_user_id INTEGER,
+  detail TEXT
 );
 CREATE TABLE IF NOT EXISTS email_outbox (
   id INTEGER PRIMARY KEY,
@@ -244,10 +254,56 @@ CREATE INDEX IF NOT EXISTS email_outbox_status_next ON email_outbox(status, next
 CREATE INDEX IF NOT EXISTS odoo_outbound_status ON odoo_outbound(status);
 CREATE INDEX IF NOT EXISTS committee_docs_current ON committee_docs(is_current);
 CREATE INDEX IF NOT EXISTS committee_docs_number ON committee_docs(number);
+CREATE TABLE IF NOT EXISTS visit_points (
+  id TEXT PRIMARY KEY,
+  legal_name TEXT NOT NULL,
+  trade_name TEXT NOT NULL,
+  point_name TEXT NOT NULL,
+  address TEXT,
+  city TEXT,
+  locality TEXT,
+  zone TEXT,
+  visit_frequency TEXT,
+  commercial TEXT,
+  visit_barista TEXT,
+  training_frequency TEXT,
+  training_barista TEXT,
+  lead_import_key TEXT,
+  active INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS visits (
+  id TEXT PRIMARY KEY,
+  status TEXT NOT NULL,
+  point_id TEXT,
+  fecha TEXT,
+  cliente TEXT,
+  sede TEXT,
+  resultado_final TEXT,
+  created_by INTEGER,
+  payload TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS visit_photos (
+  id INTEGER PRIMARY KEY,
+  visit_id TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  tag TEXT,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  r2_key TEXT,
+  data_url TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS visit_points_trade ON visit_points(trade_name);
+CREATE INDEX IF NOT EXISTS visits_fecha ON visits(fecha);
+CREATE INDEX IF NOT EXISTS visits_point ON visits(point_id);
+CREATE INDEX IF NOT EXISTS visit_photos_visit ON visit_photos(visit_id);
 `;
 
 /** Bump when SCHEMA gains indexes or columns so an existing D1 applies them once. */
-export const SCHEMA_VERSION = "4";
+export const SCHEMA_VERSION = "5";
 
 /** Applied when an older local file is missing columns added after the first release. */
 export const ALTERS = [
@@ -263,6 +319,8 @@ export const ALTERS = [
   "ALTER TABLE users ADD COLUMN session_version INTEGER NOT NULL DEFAULT 1",
   "ALTER TABLE users ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0",
   "ALTER TABLE email_outbox ADD COLUMN sender_user_id INTEGER",
+  "ALTER TABLE users ADD COLUMN active INTEGER NOT NULL DEFAULT 1",
+  "ALTER TABLE users ADD COLUMN deleted_at TEXT",
 ];
 
 export { splitSqlStatements as splitSql } from "@/lib/sql/statements";
