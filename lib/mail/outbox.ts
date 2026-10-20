@@ -1,6 +1,8 @@
 import { recipientOptedOut } from "@/lib/auth/users";
 import { joinAddresses, splitAddresses } from "@/lib/mail/addresses";
 import { deliverMail } from "@/lib/mail/deliver";
+import { assertFilesOwned, parseAttachmentIds, resolveMailParts } from "@/lib/mail/files";
+import { sanitizeEmailHtml, htmlToText } from "@/lib/mail/html";
 import { mailMode } from "@/lib/mail/message";
 import type { SqlDb } from "@/lib/sql/types";
 
@@ -21,6 +23,7 @@ export type OutboxRow = {
   sender_user_id: number | null;
   body_html?: string | null;
   cc_email?: string | null;
+  attachment_ids?: string | null;
 };
 
 const MAX_ATTEMPTS = 5;
@@ -49,6 +52,7 @@ export async function enqueueEmail(
     body: string;
     html?: string | null;
     cc?: string | string[] | null;
+    attachmentIds?: string[] | null;
     dedupeKey?: string | null;
     resend?: boolean;
     senderUserId?: number | null;
@@ -59,9 +63,16 @@ export async function enqueueEmail(
   const to = toList.join(", ");
   const ccList = input.cc == null || input.cc === "" ? [] : splitAddresses(input.cc);
   const cc = ccList.length ? joinAddresses(ccList) : null;
-  const html = input.html?.trim() || null;
+  const html = input.html?.trim() ? sanitizeEmailHtml(input.html) : null;
+  const body = input.body.trim() || (html ? htmlToText(html) : "");
+  const attachmentIds = input.senderUserId && (input.attachmentIds?.length || html)
+    ? await (async () => {
+        const ids = await assertFilesOwned(db, input.senderUserId as number, html ?? "", input.attachmentIds ?? []);
+        return ids.length ? JSON.stringify(ids) : null;
+      })()
+    : null;
   if (!input.subject.trim()) throw new Error("El asunto es obligatorio.");
-  if (!input.body.trim()) throw new Error("El cuerpo es obligatorio.");
+  if (!body.trim()) throw new Error("El cuerpo es obligatorio.");
   const now = iso(new Date());
   let dedupeKey = input.dedupeKey?.trim() || null;
   if (dedupeKey && input.resend) dedupeKey = `${dedupeKey}:${now}`;
@@ -72,16 +83,16 @@ export async function enqueueEmail(
     }
     if (existing && existing.status === "failed") {
       await db.run(
-        `UPDATE email_outbox SET status = 'queued', attempts = 0, last_error = NULL, next_attempt_at = NULL, subject = ?, body_text = ?, body_html = ?, to_email = ?, cc_email = ?, sender_user_id = ?, updated_at = ? WHERE id = ?`,
-        [input.subject, input.body, html, to, cc, input.senderUserId ?? null, now, existing.id],
+        `UPDATE email_outbox SET status = 'queued', attempts = 0, last_error = NULL, next_attempt_at = NULL, subject = ?, body_text = ?, body_html = ?, to_email = ?, cc_email = ?, attachment_ids = ?, sender_user_id = ?, updated_at = ? WHERE id = ?`,
+        [input.subject, body, html, to, cc, attachmentIds, input.senderUserId ?? null, now, existing.id],
       );
       return { id: existing.id, deduped: false, status: "queued" };
     }
   }
   const inserted = await db.run(
-    `INSERT INTO email_outbox (dedupe_key, to_email, cc_email, subject, body_text, body_html, status, attempts, created_at, updated_at, sender_user_id)
-     VALUES (?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?, ?)`,
-    [dedupeKey, to, cc, input.subject.trim(), input.body, html, now, now, input.senderUserId ?? null],
+    `INSERT INTO email_outbox (dedupe_key, to_email, cc_email, subject, body_text, body_html, attachment_ids, status, attempts, created_at, updated_at, sender_user_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?, ?)`,
+    [dedupeKey, to, cc, input.subject.trim(), body, html, attachmentIds, now, now, input.senderUserId ?? null],
   );
   return { id: inserted.lastInsertRowid, deduped: false, status: "queued" };
 }
@@ -152,12 +163,14 @@ export async function processOutbox(
     const attempt = row.attempts + 1;
     await db.run(`UPDATE email_outbox SET status = 'sending', attempts = ?, updated_at = ? WHERE id = ?`, [attempt, nowIso, row.id]);
     try {
+      const resolved = await resolveMailParts(db, row.sender_user_id, row.body_html, parseAttachmentIds(row.attachment_ids));
       const providerId = await deliver({
         to: row.to_email,
         cc: row.cc_email?.trim() || undefined,
         subject: row.subject,
         text: row.body_text,
-        html: row.body_html?.trim() || undefined,
+        html: resolved.html,
+        parts: resolved.parts,
         senderUserId: row.sender_user_id,
         db,
       });

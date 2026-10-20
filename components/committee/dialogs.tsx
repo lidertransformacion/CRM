@@ -3,7 +3,11 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Copy, Link2, Send, Unlink } from "lucide-react";
 import { buildCommitteeEmail } from "@/lib/committee/email";
+import { AttachmentBar } from "@/components/emails/AttachmentBar";
+import { RichTextEditor } from "@/components/emails/RichTextEditor";
+import { deleteMailFile, uploadMailFile, type UploadedFile } from "@/components/emails/upload";
 import { RecipientFields, type MailFavorite } from "@/components/committee/RecipientFields";
+import { MAX_MAIL_BYTES } from "@/lib/mail/html";
 import { boardStats } from "@/lib/committee/metrics";
 import type { CommitteeDoc } from "@/lib/committee/types";
 import { Badge } from "@/components/ui/badge";
@@ -33,6 +37,11 @@ export function EmailDialog({ open, onOpenChange, doc, asOf }: { open: boolean; 
   const [savingFavorite, setSavingFavorite] = useState(false);
   const [sending, setSending] = useState(false);
   const [notice, setNotice] = useState<{ tone: "ok" | "danger"; text: string } | null>(null);
+  const [html, setHtml] = useState(email.html);
+  const [files, setFiles] = useState<UploadedFile[]>([]);
+  const [inlineBytes, setInlineBytes] = useState(0);
+  const [uploading, setUploading] = useState(false);
+  const attachmentBytes = files.reduce((sum, file) => sum + file.size, 0) + inlineBytes;
 
   useEffect(() => {
     if (!open) {
@@ -40,6 +49,11 @@ export function EmailDialog({ open, onOpenChange, doc, asOf }: { open: boolean; 
       setNotice(null);
       return;
     }
+    setHtml(email.html);
+  }, [open, email.html]);
+
+  useEffect(() => {
+    if (!open) return;
     const controller = new AbortController();
     void (async () => {
       try {
@@ -69,12 +83,12 @@ export function EmailDialog({ open, onOpenChange, doc, asOf }: { open: boolean; 
       } else if (typeof ClipboardItem !== "undefined") {
         await navigator.clipboard.write([
           new ClipboardItem({
-            "text/html": new Blob([email.html], { type: "text/html" }),
+            "text/html": new Blob([html], { type: "text/html" }),
             "text/plain": new Blob([email.text], { type: "text/plain" }),
           }),
         ]);
       } else {
-        await navigator.clipboard.writeText(email.text);
+        await navigator.clipboard.writeText(html);
       }
       setCopied(kind);
       toast({ title: kind === "subject" ? "Asunto copiado" : "Correo copiado con la tabla" });
@@ -120,6 +134,33 @@ export function EmailDialog({ open, onOpenChange, doc, asOf }: { open: boolean; 
     }
   }
 
+  async function addCommitteeFile(file: File) {
+    if (attachmentBytes + file.size > MAX_MAIL_BYTES) {
+      toast({ title: "El correo pasa de 20 MB", description: "Gmail rechaza mensajes cerca de 25 MB ya codificados.", tone: "danger" });
+      return;
+    }
+    setUploading(true);
+    try {
+      const saved = await uploadMailFile(file);
+      setFiles((current) => [...current, saved]);
+    } catch (error) {
+      toast({ title: "No se pudo adjuntar", description: error instanceof Error ? error.message : undefined, tone: "danger" });
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  async function removeCommitteeFile(id: string) {
+    const previous = files;
+    setFiles((current) => current.filter((file) => file.id !== id));
+    try {
+      await deleteMailFile(id);
+    } catch (error) {
+      setFiles(previous);
+      toast({ title: "No se pudo quitar el archivo", description: error instanceof Error ? error.message : undefined, tone: "danger" });
+    }
+  }
+
   async function send() {
     setSending(true);
     setNotice(null);
@@ -127,7 +168,7 @@ export function EmailDialog({ open, onOpenChange, doc, asOf }: { open: boolean; 
       const response = await fetch("/api/committee/email", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ committeeNumber: doc.committee.number, to, cc, asOf }),
+        body: JSON.stringify({ committeeNumber: doc.committee.number, to, cc, asOf, html, attachmentIds: files.map((file) => file.id) }),
       });
       const payload = (await response.json()) as { status?: string; testMode?: boolean; mode?: string; error?: string | null };
       if (!response.ok) throw new Error(payload.error || "No se pudo enviar.");
@@ -187,9 +228,16 @@ export function EmailDialog({ open, onOpenChange, doc, asOf }: { open: boolean; 
             onSaveFavorite={saveFavorite}
             onDeleteFavorite={deleteFavorite}
           />
-          <Field label="Cuerpo del correo" hint="Vista previa de lo que se envía. Las filas en rojo son pendientes con 2 o más comités.">
-            <div className="email-preview max-h-[36vh] overflow-auto rounded-lg border border-line bg-surface p-4 max-sm:max-h-none max-sm:p-3" dangerouslySetInnerHTML={{ __html: email.html }} />
+          <Field label="Cuerpo del correo" hint="Puedes editar el resumen. Las filas en rojo son pendientes con 2 o más comités.">
+            <RichTextEditor id="committee-body" value={html} onChange={setHtml} onImageUploaded={(file) => setInlineBytes((current) => current + file.size)} />
           </Field>
+          <AttachmentBar
+            files={files}
+            totalBytes={attachmentBytes}
+            pending={uploading}
+            onAdd={(file) => void addCommitteeFile(file)}
+            onRemove={(id) => void removeCommitteeFile(id)}
+          />
         </DialogBody>
         <DialogFooter>
           <Button variant="secondary" onClick={() => onOpenChange(false)}>Cerrar</Button>
