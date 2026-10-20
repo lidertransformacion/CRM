@@ -1,4 +1,5 @@
 import { recipientOptedOut } from "@/lib/auth/users";
+import { joinAddresses, splitAddresses } from "@/lib/mail/addresses";
 import { deliverMail } from "@/lib/mail/deliver";
 import { mailMode } from "@/lib/mail/message";
 import type { SqlDb } from "@/lib/sql/types";
@@ -18,12 +19,21 @@ export type OutboxRow = {
   sent_at: string | null;
   next_attempt_at: string | null;
   sender_user_id: number | null;
+  body_html?: string | null;
+  cc_email?: string | null;
 };
 
 const MAX_ATTEMPTS = 5;
 
 function iso(date: Date): string {
   return date.toISOString();
+}
+
+async function optedOutAddress(db: SqlDb, addresses: string[]): Promise<string | null> {
+  for (const email of addresses) {
+    if (await recipientOptedOut(db, email)) return email;
+  }
+  return null;
 }
 
 export function backoffMs(attempts: number): number {
@@ -33,10 +43,23 @@ export function backoffMs(attempts: number): number {
 
 export async function enqueueEmail(
   db: SqlDb,
-  input: { to: string; subject: string; body: string; dedupeKey?: string | null; resend?: boolean; senderUserId?: number | null },
+  input: {
+    to: string | string[];
+    subject: string;
+    body: string;
+    html?: string | null;
+    cc?: string | string[] | null;
+    dedupeKey?: string | null;
+    resend?: boolean;
+    senderUserId?: number | null;
+  },
 ): Promise<{ id: number; deduped: boolean; status: string }> {
-  const to = input.to.trim();
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)) throw new Error("El destinatario no es un correo.");
+  const toList = splitAddresses(input.to);
+  if (!toList.length) throw new Error("El destinatario no es un correo.");
+  const to = toList.join(", ");
+  const ccList = input.cc == null || input.cc === "" ? [] : splitAddresses(input.cc);
+  const cc = ccList.length ? joinAddresses(ccList) : null;
+  const html = input.html?.trim() || null;
   if (!input.subject.trim()) throw new Error("El asunto es obligatorio.");
   if (!input.body.trim()) throw new Error("El cuerpo es obligatorio.");
   const now = iso(new Date());
@@ -49,16 +72,16 @@ export async function enqueueEmail(
     }
     if (existing && existing.status === "failed") {
       await db.run(
-        `UPDATE email_outbox SET status = 'queued', attempts = 0, last_error = NULL, next_attempt_at = NULL, subject = ?, body_text = ?, to_email = ?, sender_user_id = ?, updated_at = ? WHERE id = ?`,
-        [input.subject, input.body, to, input.senderUserId ?? null, now, existing.id],
+        `UPDATE email_outbox SET status = 'queued', attempts = 0, last_error = NULL, next_attempt_at = NULL, subject = ?, body_text = ?, body_html = ?, to_email = ?, cc_email = ?, sender_user_id = ?, updated_at = ? WHERE id = ?`,
+        [input.subject, input.body, html, to, cc, input.senderUserId ?? null, now, existing.id],
       );
       return { id: existing.id, deduped: false, status: "queued" };
     }
   }
   const inserted = await db.run(
-    `INSERT INTO email_outbox (dedupe_key, to_email, subject, body_text, status, attempts, created_at, updated_at, sender_user_id)
-     VALUES (?, ?, ?, ?, 'queued', 0, ?, ?, ?)`,
-    [dedupeKey, to, input.subject.trim(), input.body, now, now, input.senderUserId ?? null],
+    `INSERT INTO email_outbox (dedupe_key, to_email, cc_email, subject, body_text, body_html, status, attempts, created_at, updated_at, sender_user_id)
+     VALUES (?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?, ?)`,
+    [dedupeKey, to, cc, input.subject.trim(), input.body, html, now, now, input.senderUserId ?? null],
   );
   return { id: inserted.lastInsertRowid, deduped: false, status: "queued" };
 }
@@ -85,6 +108,7 @@ export async function processOutbox(
   options: {
     now?: Date;
     limit?: number;
+    ids?: number[];
     deliver?: typeof deliverMail;
     backoffMs?: (attempts: number) => number;
   } = {},
@@ -93,12 +117,17 @@ export async function processOutbox(
   const nowIso = iso(now);
   const delay = options.backoffMs ?? backoffMs;
   const deliver = options.deliver ?? deliverMail;
-  const rows = await db.all<OutboxRow>(
-    `SELECT * FROM email_outbox
-     WHERE status = 'queued' AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
-     ORDER BY id LIMIT ?`,
-    [nowIso, options.limit ?? 25],
-  );
+  const rows = options.ids?.length
+    ? await db.all<OutboxRow>(
+        `SELECT * FROM email_outbox WHERE status = 'queued' AND id IN (${options.ids.map(() => "?").join(", ")}) ORDER BY id`,
+        options.ids,
+      )
+    : await db.all<OutboxRow>(
+        `SELECT * FROM email_outbox
+         WHERE status = 'queued' AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
+         ORDER BY id LIMIT ?`,
+        [nowIso, options.limit ?? 25],
+      );
   const summary = { sent: 0, failed: 0, skipped: 0, queued: 0 };
   if (!options.deliver && (await mailMode()) === "log") {
     summary.queued = rows.length;
@@ -109,7 +138,9 @@ export async function processOutbox(
     return summary;
   }
   for (const row of rows) {
-    if (await recipientOptedOut(db, row.to_email)) {
+    const targets = [...splitAddresses(row.to_email), ...(row.cc_email ? splitAddresses(row.cc_email) : [])];
+    const blocked = await optedOutAddress(db, targets);
+    if (blocked) {
       await db.run(`UPDATE email_outbox SET status = 'skipped', updated_at = ?, last_error = ? WHERE id = ?`, [
         nowIso,
         "El destinatario optó por no recibir correos.",
@@ -123,8 +154,10 @@ export async function processOutbox(
     try {
       const providerId = await deliver({
         to: row.to_email,
+        cc: row.cc_email?.trim() || undefined,
         subject: row.subject,
         text: row.body_text,
+        html: row.body_html?.trim() || undefined,
         senderUserId: row.sender_user_id,
         db,
       });

@@ -7,6 +7,7 @@ export type MailMode = "log" | "smtp" | "gmail_api";
 
 export type OutboundMail = {
   to: string;
+  cc?: string;
   subject: string;
   text: string;
   html?: string;
@@ -44,18 +45,21 @@ export function textToHtml(text: string): string {
   return `<div style="font-family:Arial,sans-serif;font-size:14px;line-height:1.45;white-space:pre-wrap">${escapeHtml(text)}</div>`;
 }
 
-/** In test mode the message goes to the sender, with the original customer address only in the body. */
+/** In test mode the message goes to the sender. Original To and CC stay in the body only. */
 export function applyTestRedirect(message: OutboundMail, safeTo: string): OutboundMail {
   const original = message.to.trim();
+  const originalCc = message.cc?.trim() ?? "";
   const subject = message.subject.startsWith("[PRUEBA]") ? message.subject : `[PRUEBA] ${message.subject}`;
-  if (original.toLowerCase() === safeTo.trim().toLowerCase()) {
-    return { ...message, to: safeTo.trim(), subject };
+  if (original.toLowerCase() === safeTo.trim().toLowerCase() && !originalCc) {
+    return { ...message, to: safeTo.trim(), cc: undefined, subject };
   }
-  const note = `Modo de prueba. Este correo no se envió al cliente.\nDestinatario original: ${original}\n\n`;
+  const ccLine = originalCc ? `\nCopia original: ${originalCc}` : "";
+  const note = `Modo de prueba. Este correo no se envió al cliente.\nDestinatario original: ${original}${ccLine}\n\n`;
   const text = `${note}${message.text}`;
-  const banner = `<p><strong>Modo de prueba.</strong> Este correo no se envió al cliente.<br>Destinatario original: ${escapeHtml(original)}</p>`;
+  const ccHtml = originalCc ? `<br>Copia original: ${escapeHtml(originalCc)}` : "";
+  const banner = `<p><strong>Modo de prueba.</strong> Este correo no se envió al cliente.<br>Destinatario original: ${escapeHtml(original)}${ccHtml}</p>`;
   const html = message.html ? `${banner}${message.html}` : textToHtml(text);
-  return { ...message, to: safeTo.trim(), subject, text, html };
+  return { ...message, to: safeTo.trim(), cc: undefined, subject, text, html };
 }
 
 export function encodeSubject(subject: string): string {
@@ -75,6 +79,7 @@ export function rfc822(message: OutboundMail): string {
   const headers = [
     `From: ${formatAddress(message.fromName, message.fromAddress)}`,
     `To: ${message.to}`,
+    ...(message.cc?.trim() ? [`Cc: ${message.cc.trim()}`] : []),
     `Subject: ${encodeSubject(message.subject)}`,
     "MIME-Version: 1.0",
   ];

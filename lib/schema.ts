@@ -189,7 +189,9 @@ CREATE TABLE IF NOT EXISTS email_outbox (
   updated_at TEXT NOT NULL,
   sent_at TEXT,
   next_attempt_at TEXT,
-  sender_user_id INTEGER
+  sender_user_id INTEGER,
+  body_html TEXT,
+  cc_email TEXT
 );
 CREATE UNIQUE INDEX IF NOT EXISTS email_outbox_dedupe ON email_outbox(dedupe_key);
 CREATE TABLE IF NOT EXISTS gmail_tokens (
@@ -244,10 +246,36 @@ CREATE INDEX IF NOT EXISTS email_outbox_status_next ON email_outbox(status, next
 CREATE INDEX IF NOT EXISTS odoo_outbound_status ON odoo_outbound(status);
 CREATE INDEX IF NOT EXISTS committee_docs_current ON committee_docs(is_current);
 CREATE INDEX IF NOT EXISTS committee_docs_number ON committee_docs(number);
+CREATE TABLE IF NOT EXISTS mail_favorites (
+  id INTEGER PRIMARY KEY,
+  user_id INTEGER NOT NULL,
+  name TEXT NOT NULL,
+  to_emails TEXT NOT NULL,
+  cc_emails TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE (user_id, name)
+);
+CREATE INDEX IF NOT EXISTS mail_favorites_user ON mail_favorites(user_id);
+CREATE TABLE IF NOT EXISTS committee_email_log (
+  id INTEGER PRIMARY KEY,
+  at TEXT NOT NULL,
+  user_id INTEGER NOT NULL,
+  committee_number INTEGER,
+  to_emails TEXT NOT NULL,
+  cc_emails TEXT NOT NULL DEFAULT '',
+  subject TEXT NOT NULL,
+  status TEXT NOT NULL,
+  error TEXT,
+  provider_message_id TEXT,
+  outbox_id INTEGER,
+  test_mode INTEGER NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS committee_email_log_user ON committee_email_log(user_id, at);
 `;
 
 /** Bump when SCHEMA gains indexes or columns so an existing D1 applies them once. */
-export const SCHEMA_VERSION = "4";
+export const SCHEMA_VERSION = "5";
 
 /** Applied when an older local file is missing columns added after the first release. */
 export const ALTERS = [
@@ -263,6 +291,8 @@ export const ALTERS = [
   "ALTER TABLE users ADD COLUMN session_version INTEGER NOT NULL DEFAULT 1",
   "ALTER TABLE users ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0",
   "ALTER TABLE email_outbox ADD COLUMN sender_user_id INTEGER",
+  "ALTER TABLE email_outbox ADD COLUMN body_html TEXT",
+  "ALTER TABLE email_outbox ADD COLUMN cc_email TEXT",
 ];
 
 export { splitSqlStatements as splitSql } from "@/lib/sql/statements";
