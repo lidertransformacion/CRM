@@ -2,17 +2,17 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { ALTERS, COMMERCIAL_ROLE_SQL, SCHEMA } from "@/lib/schema";
+import { alterTarget, columnListed, pragmaTableInfo } from "@/lib/sql/alters";
 import type { SqlDb } from "@/lib/sql/types";
 
 function applySync(db: DatabaseSync) {
   db.exec("PRAGMA foreign_keys = ON;");
   db.exec(SCHEMA);
   for (const statement of ALTERS) {
-    try {
-      db.exec(statement);
-    } catch {
-      // Column already exists on databases created with the current schema.
-    }
+    const { table, column } = alterTarget(statement);
+    const rows = db.prepare(pragmaTableInfo(table)).all() as { name: string }[];
+    if (columnListed(rows, column)) continue;
+    db.exec(statement);
   }
   try {
     db.exec("CREATE UNIQUE INDEX IF NOT EXISTS equipment_internal_id ON equipment(internal_id)");

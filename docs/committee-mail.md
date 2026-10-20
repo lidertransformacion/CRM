@@ -12,12 +12,9 @@ Database: D1 `crm-pay-line` (`ded1c012-2e0a-4b1b-9339-24047b32a99e`), binding `D
 npx wrangler d1 migrations apply crm-pay-line --remote
 ```
 
-That runs `migrations/0005_committee_mail.sql`. The Worker also creates the same objects on boot (`lib/schema.ts`, schema version 5). `CREATE TABLE IF NOT EXISTS` is safe to run twice. The two `ALTER TABLE` statements fail if `body_html` and `cc_email` are already present. If the migration stops on that error, run only the `CREATE TABLE` statements below in the D1 console.
+That runs `migrations/0005_committee_mail.sql` as part of the sequence `0003` through `0008`. The Worker also creates the same objects on boot (`lib/schema.ts`, schema version 7). `CREATE TABLE IF NOT EXISTS` is safe to run twice. `email_outbox.body_html` and `email_outbox.cc_email` are added by boot only when `PRAGMA table_info` does not already list them.
 
 ```sql
-ALTER TABLE email_outbox ADD COLUMN body_html TEXT;
-ALTER TABLE email_outbox ADD COLUMN cc_email TEXT;
-
 CREATE TABLE IF NOT EXISTS mail_favorites (
   id INTEGER PRIMARY KEY,
   user_id INTEGER NOT NULL,

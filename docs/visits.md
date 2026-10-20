@@ -19,14 +19,11 @@ That runs, in order:
 1. `migrations/0003_users_soft_delete.sql`
 2. `migrations/0004_visits.sql`
 
-The Worker also creates the same tables and the two user columns on boot (`lib/schema.ts`, schema version 5). `CREATE TABLE IF NOT EXISTS` is safe to run twice. The two `ALTER TABLE` statements fail if `active` and `deleted_at` are already present. If the migration stops on that error, run only `migrations/0004_visits.sql` in the D1 console.
+The Worker also creates the same tables on boot (`lib/schema.ts`, schema version 7). `CREATE TABLE IF NOT EXISTS` is safe to run twice. `users.active` and `users.deleted_at` are not in this file, because SQLite has no `ADD COLUMN IF NOT EXISTS`. Boot adds each column only when `PRAGMA table_info` does not already list it.
 
 ### 0003 — users
 
 ```sql
-ALTER TABLE users ADD COLUMN active INTEGER NOT NULL DEFAULT 1;
-ALTER TABLE users ADD COLUMN deleted_at TEXT;
-
 CREATE TABLE IF NOT EXISTS user_events (
   id INTEGER PRIMARY KEY,
   at TEXT NOT NULL,
@@ -109,22 +106,11 @@ Each photo is compressed in the browser (JPEG, longest edge 720px, at most 4). S
 
 Storage:
 
-- If the Worker env has an R2 binding named `VISIT_PHOTOS`, the object is stored under `visits/<visit id>/<kind>-<index>.jpg` and `visit_photos.r2_key` is set. `data_url` stays null.
-- Otherwise the data URL is stored in `visit_photos.data_url`. That is the path this release uses. A single value must stay under 200,000 characters so the D1 row stays small. The app rejects anything larger.
+- Photo bytes go to the existing R2 bucket `crm-libertario-mail` through the binding `MAIL_FILES` (the same bucket as mail attachments). The object key is `visits/<visit id>/<kind>-<index>.jpg` and `visit_photos.r2_key` is set. `data_url` stays null.
+- Those bytes count toward the shared 10 GB cap in `storage_usage`. Deleting the visit removes the object and frees the bytes.
+- If the binding is missing, the data URL is stored in `visit_photos.data_url` and does not count toward the R2 cap. A single value must stay under 200,000 characters so the D1 row stays small. The app rejects anything larger.
 
-The binding is **not** in `wrangler.jsonc`. Adding it before the bucket exists would make the production deploy fail. To turn R2 on later, create the bucket and add the binding, then redeploy:
-
-```bash
-npx wrangler r2 bucket create crm-libertario-visits
-```
-
-```jsonc
-"r2_buckets": [
-  { "binding": "VISIT_PHOTOS", "bucket_name": "crm-libertario-visits" }
-]
-```
-
-No new secret is required for visits. Mail keeps using the existing outbox.
+There is no `VISIT_PHOTOS` binding. No new secret is required for visits. Mail keeps using the existing outbox. `MAIL_TEST_MODE` is unchanged.
 
 ## Mail
 

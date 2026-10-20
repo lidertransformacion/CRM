@@ -9,7 +9,7 @@ import { promisify } from "node:util";
 import { BOOTSTRAP_ERROR, authenticate, createUser, ensureBootstrapAdmin, HttpError, resetUserPassword } from "@/lib/auth/users";
 import { SESSION_COOKIE, signSession } from "@/lib/auth/session";
 import { openDatabase } from "@/lib/db";
-import { wrapDatabaseSync } from "@/lib/sql/node";
+import { openDatabaseSync, wrapDatabaseSync } from "@/lib/sql/node";
 import { middleware } from "@/middleware";
 
 const SECRET = "test-session-secret-value";
@@ -45,6 +45,28 @@ describe("company email", () => {
     expect(isLibertarioEmail("@libertariocoffee.com")).toBe(false);
     expect(isLibertarioEmail("user@libertariocoffee.com@extra.com")).toBe(false);
     expect(isLibertarioEmail("user libertario@libertariocoffee.com")).toBe(false);
+  });
+});
+
+describe("role rename", () => {
+  const created: string[] = [];
+  afterEach(() => {
+    for (const file of created) fs.rmSync(file, { force: true });
+    created.length = 0;
+  });
+
+  it("turns a leftover user role into comercial when the database opens again", () => {
+    const file = path.join(os.tmpdir(), `crm-role-${Date.now()}-${Math.random().toString(16).slice(2)}.sqlite`);
+    created.push(file);
+    const first = openDatabaseSync(file);
+    first
+      .prepare("INSERT INTO users (email, password_hash, role, created_at, updated_at) VALUES (?, ?, 'user', ?, ?)")
+      .run("legacy@libertariocoffee.com", "x", "t", "t");
+    first.close();
+    const second = openDatabaseSync(file);
+    const row = second.prepare("SELECT role FROM users WHERE email = ?").get("legacy@libertariocoffee.com") as { role: string };
+    expect(row.role).toBe("comercial");
+    second.close();
   });
 });
 

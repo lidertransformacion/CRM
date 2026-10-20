@@ -11,11 +11,11 @@ export type StorageBucket = LegalBucket & {
   }>;
 };
 
-/** Other R2 bindings counted in the same 10 GB cap when they are configured. */
-export const EXTRA_R2_BINDINGS = [
-  { binding: "MAIL_FILES", label: "Correos" },
-  { binding: "VISIT_PHOTOS", label: "Visitas" },
-] as const;
+/**
+ * Mail attachments and visit photos share `MAIL_FILES` (`crm-libertario-mail`).
+ * Visit objects use the `visits/` prefix. Contracts stay on `LEGAL_FILES`.
+ */
+export const EXTRA_R2_BINDINGS = [{ binding: "MAIL_FILES", label: "Correos y visitas" }] as const;
 
 export type Usage = {
   bytesUsed: number;

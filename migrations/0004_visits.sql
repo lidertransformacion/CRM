@@ -1,6 +1,6 @@
--- Hospitality visits. Photos live here when the VISIT_PHOTOS R2 binding is absent.
--- data_url holds a compressed JPEG data URL in that fallback. With R2, r2_key is set
--- and data_url stays null.
+-- Hospitality visits. Photo bytes go to R2 binding MAIL_FILES (bucket crm-libertario-mail)
+-- under the visits/ prefix. data_url holds a compressed JPEG data URL only when that
+-- binding is missing. With R2, r2_key is set and data_url stays null.
 CREATE TABLE IF NOT EXISTS visit_points (
   id TEXT PRIMARY KEY,
   legal_name TEXT NOT NULL,

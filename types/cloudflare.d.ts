@@ -1,7 +1,7 @@
 declare module "cloudflare:workers" {
   export const env: {
     DB?: D1Database;
-    /** Mail attachments and inline images. Bucket crm-libertario-mail. */
+    /** Mail attachments, inline images, and visit photos under visits/. Bucket crm-libertario-mail. */
     MAIL_FILES?: MailObjectBucket;
     APP_KV?: KVNamespace;
     /** Private contract PDFs. Bucket `crm-legal-files`. Create it before deploy. */

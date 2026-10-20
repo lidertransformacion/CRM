@@ -1,8 +1,8 @@
 -- Rich mail: file metadata for attachments and inline images, plus the outbox list.
--- Bytes live in R2 (binding MAIL_FILES) when that binding exists.
+-- Bytes live in R2 (binding MAIL_FILES, bucket crm-libertario-mail) when that binding exists.
 -- data_base64 is only a fallback for a single file under 400 KB.
--- ALTER TABLE fails if attachment_ids is already present. Skip that line and run the CREATE statements.
-ALTER TABLE email_outbox ADD COLUMN attachment_ids TEXT;
+-- email_outbox.attachment_ids is added by Worker boot only when the column is missing.
+-- SQLite has no ADD COLUMN IF NOT EXISTS, so this file does not ALTER and can run twice.
 
 CREATE TABLE IF NOT EXISTS mail_files (
   id TEXT PRIMARY KEY,

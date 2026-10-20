@@ -2,6 +2,7 @@ import { HttpError } from "@/lib/auth/users";
 import { fold } from "@/lib/visits/catalog";
 import { decodeVisitCode, findVisitCodes } from "@/lib/visits/codec";
 import { SEED_POINTS } from "@/lib/visits/points-seed";
+import { releaseBytes, reserveBytes } from "@/lib/storage/quota";
 import { bytesToDataUrl, dataUrlBytes, visitPhotoBucket } from "@/lib/visits/photos";
 import { normalizeVisit, type VisitBrief, type VisitPhoto, type VisitPoint, type VisitRecord } from "@/lib/visits/model";
 import type { SqlDb } from "@/lib/sql/types";
@@ -184,22 +185,42 @@ async function storeMedia(db: SqlDb, visitId: string, kind: string, tag: string,
   let storedUrl: string | null = dataUrl;
   if (bucket && parsed) {
     r2Key = `visits/${visitId}/${kind}-${sort}.${parsed.mime.includes("png") ? "png" : "jpg"}`;
-    await bucket.put(r2Key, parsed.bytes, { httpMetadata: { contentType: parsed.mime } });
+    await reserveBytes(db, parsed.bytes.byteLength);
+    try {
+      await bucket.put(r2Key, parsed.bytes, { httpMetadata: { contentType: parsed.mime } });
+    } catch (error) {
+      await releaseBytes(db, parsed.bytes.byteLength);
+      throw error;
+    }
     storedUrl = null;
   }
-  await db.run(
-    `INSERT INTO visit_photos (visit_id, kind, tag, sort_order, r2_key, data_url, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    [visitId, kind, tag, sort, r2Key, storedUrl, now],
-  );
+  try {
+    await db.run(
+      `INSERT INTO visit_photos (visit_id, kind, tag, sort_order, r2_key, data_url, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [visitId, kind, tag, sort, r2Key, storedUrl, now],
+    );
+  } catch (error) {
+    if (bucket && r2Key && parsed) {
+      try {
+        await bucket.delete(r2Key);
+      } catch {
+        // The reservation is released below even if the object is already gone.
+      }
+      await releaseBytes(db, parsed.bytes.byteLength);
+    }
+    throw error;
+  }
 }
 
 async function clearMedia(db: SqlDb, visitId: string) {
   const rows = await db.all<{ r2_key: string | null }>("SELECT r2_key FROM visit_photos WHERE visit_id = ?", [visitId]);
   const bucket = await visitPhotoBucket();
-  if (bucket) {
-    for (const row of rows) {
-      if (row.r2_key) await bucket.delete(row.r2_key);
-    }
+  for (const row of rows) {
+    if (!row.r2_key || !bucket) continue;
+    const object = await bucket.get(row.r2_key);
+    const size = object ? (await object.arrayBuffer()).byteLength : 0;
+    await bucket.delete(row.r2_key);
+    if (size > 0) await releaseBytes(db, size);
   }
   await db.run("DELETE FROM visit_photos WHERE visit_id = ?", [visitId]);
 }

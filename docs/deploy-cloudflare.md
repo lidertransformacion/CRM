@@ -42,8 +42,9 @@ The build image defaults to Node.js 24. This repository's `.nvmrc` is `22.14.0`,
 | `MAIL_MODE` | `gmail_api` |
 | `SHEETS_SYNC_ENABLED` | `false` |
 | Cron | `*/5 * * * *` |
-| R2 binding | `LEGAL_FILES` |
-| R2 bucket | `crm-legal-files` (exists). Shared 10 GB cap with `MAIL_FILES` and `VISIT_PHOTOS` when those bindings exist. |
+| R2 `LEGAL_FILES` | Bucket `crm-legal-files` (exists). Contract PDFs. |
+| R2 `MAIL_FILES` | Bucket `crm-libertario-mail` (exists). Mail files, and visit photos under `visits/`. |
+| Storage cap | 10 GB total across both buckets, tracked in D1 `storage_usage`. |
 
 These plain vars are also committed: `MAIL_FROM_ADDRESS`, `MAIL_FROM_NAME`, `GOOGLE_SHEETS_SPREADSHEET_ID`, `GOOGLE_SHEETS_TAB`, and `BOOTSTRAP_ADMIN_EMAIL`.
 
@@ -82,7 +83,7 @@ Set these only when the matching feature is turned on:
 
 Set or rotate one with `npx wrangler secret put <NAME>` from a trusted machine. The command prompts for the value.
 
-Per-user Gmail also needs the D1 migration `migrations/0002_gmail_tokens.sql` on `crm-pay-line` before connect is used. Visits and removing a team member need `migrations/0003_users_soft_delete.sql` and `migrations/0004_visits.sql`. The exact statements and the optional `VISIT_PHOTOS` R2 binding are in [visits.md](visits.md). Sending the committee summary needs `migrations/0005_committee_mail.sql`. Rich mail files need `migrations/0006_rich_mail.sql` and the R2 bucket `crm-libertario-mail` bound as `MAIL_FILES`. The exact statements are in [committee-mail.md](committee-mail.md) and [rich-mail.md](rich-mail.md). There is no new secret. `MAIL_TEST_MODE` stays as it is.
+Per-user Gmail also needs the D1 migration `migrations/0002_gmail_tokens.sql` on `crm-pay-line` before connect is used. After that, apply `0003_users_soft_delete.sql` through `0008_storage_quota.sql` in filename order. Every statement in those files is safe to run again: `CREATE` uses `IF NOT EXISTS`, the storage counter insert does nothing when the row exists, and the role rename only updates rows still stored as `user`. SQLite cannot add a column with `IF NOT EXISTS`, so those files do not `ALTER TABLE`. The Worker adds a missing column on boot when `schema_version` is not `7`, after `PRAGMA table_info` shows the column is absent. There is no `VISIT_PHOTOS` binding. There is no new secret. `MAIL_TEST_MODE` stays as it is. Details are in [visits.md](visits.md), [committee-mail.md](committee-mail.md), and [rich-mail.md](rich-mail.md).
 
 ```bash
 npx wrangler d1 migrations apply crm-pay-line --remote

@@ -50,7 +50,7 @@ The table is `gmail_tokens`:
 
 There is no `d1_migrations` history on the live database today. Wrangler may also offer `0001_init.sql`. That file uses `CREATE TABLE IF NOT EXISTS` and is safe to apply.
 
-The app schema version is `4`. The first request after deploy adds `email_outbox.sender_user_id` so a queued message remembers who sent it. That column is not in the migration file, so applying the migration after the Worker has already booted does not fail on a duplicate column.
+The app schema version is `7`. The first request after deploy adds any missing column, including `email_outbox.sender_user_id`, only when `PRAGMA table_info` does not already list it. Applying a migration after the Worker has booted does not fail on a duplicate column.
 
 ## Connect and disconnect
 

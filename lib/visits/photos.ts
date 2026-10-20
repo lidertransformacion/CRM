@@ -1,20 +1,8 @@
-/** Optional R2 bucket. Absent in local SQLite and until the binding is added on the Worker. */
-type PhotoBucket = {
-  put(key: string, value: Uint8Array | ArrayBuffer, options?: { httpMetadata?: { contentType?: string } }): Promise<unknown>;
-  get(key: string): Promise<{ arrayBuffer(): Promise<ArrayBuffer> } | null>;
-  delete(keys: string | string[]): Promise<unknown>;
-};
+import { mailFilesBucket } from "@/lib/mail/files";
 
-export async function visitPhotoBucket(): Promise<PhotoBucket | null> {
-  if (process.env.VITEST) return null;
-  try {
-    const { env } = await import("cloudflare:workers");
-    const bucket = (env as { VISIT_PHOTOS?: PhotoBucket }).VISIT_PHOTOS;
-    if (!bucket || typeof bucket.put !== "function") return null;
-    return bucket;
-  } catch {
-    return null;
-  }
+/** Same bucket as mail attachments: `MAIL_FILES` / `crm-libertario-mail`, keys under `visits/`. */
+export async function visitPhotoBucket() {
+  return mailFilesBucket();
 }
 
 export function dataUrlBytes(dataUrl: string): { mime: string; bytes: Uint8Array } | null {

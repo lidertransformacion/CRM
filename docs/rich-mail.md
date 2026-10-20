@@ -15,8 +15,6 @@ npx wrangler d1 migrations apply crm-pay-line --remote
 `migrations/0006_rich_mail.sql`:
 
 ```sql
-ALTER TABLE email_outbox ADD COLUMN attachment_ids TEXT;
-
 CREATE TABLE IF NOT EXISTS mail_files (
   id TEXT PRIMARY KEY,
   user_id INTEGER NOT NULL,
@@ -32,25 +30,22 @@ CREATE TABLE IF NOT EXISTS mail_files (
 CREATE INDEX IF NOT EXISTS mail_files_user ON mail_files(user_id);
 ```
 
-The Worker also creates these objects on boot (schema version 6). `CREATE TABLE IF NOT EXISTS` can run twice. The `ALTER TABLE` fails if `attachment_ids` is already present. If that happens, run only the `CREATE` statements.
+The Worker also creates these objects on boot (schema version 7). `CREATE TABLE IF NOT EXISTS` can run twice. `email_outbox.attachment_ids` is added by boot only when `PRAGMA table_info` does not already list it.
 
 `attachment_ids` is a JSON array of `mail_files.id`. Inline images are also discovered from `src="/api/mail/files/<id>"` in the HTML.
 
 ## R2 binding
 
-`wrangler.jsonc` binds `MAIL_FILES` to the bucket `crm-libertario-mail`. Create the bucket before deploying, or the Worker deploy fails:
-
-```bash
-npx wrangler r2 bucket create crm-libertario-mail
-```
+`wrangler.jsonc` binds `MAIL_FILES` to the bucket `crm-libertario-mail`. That bucket already exists. Visit photos use the same bucket under `visits/`. Contract PDFs stay in `LEGAL_FILES` / `crm-legal-files`. Bytes stored in either bucket count toward the shared 10 GB cap.
 
 ```jsonc
 "r2_buckets": [
-  { "binding": "MAIL_FILES", "bucket_name": "crm-libertario-mail" }
+  { "binding": "MAIL_FILES", "bucket_name": "crm-libertario-mail" },
+  { "binding": "LEGAL_FILES", "bucket_name": "crm-legal-files" }
 ]
 ```
 
-Objects are stored at `mail/<user id>/<file id>`. No new secret.
+Mail objects are stored at `mail/<user id>/<file id>`. No new secret. `MAIL_TEST_MODE` is unchanged.
 
 If the binding is missing at runtime (local tests), a file of at most 400 KB is stored in `mail_files.data_base64`. Larger files are rejected until R2 is bound. Do not put multi-megabyte files in D1.
 

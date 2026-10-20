@@ -164,4 +164,5 @@ CREATE TABLE IF NOT EXISTS notifications (
 
 CREATE INDEX IF NOT EXISTS notifications_user ON notifications(user_id, read_at);
 
+-- Safe to run again: rows already stored as comercial are left alone.
 UPDATE users SET role = 'comercial' WHERE role = 'user';

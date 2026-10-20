@@ -488,10 +488,14 @@ CREATE TABLE IF NOT EXISTS storage_usage (
 );
 `;
 
-/** Bump when SCHEMA gains indexes or columns so an existing D1 applies them once. */
-export const SCHEMA_VERSION = "6";
+/**
+ * Integrated schema: visits, committee mail, rich mail, legal files, and the storage counter.
+ * Unmerged branches stamped 5 or 6 with different tables, so 7 reapplies this script once.
+ * CREATE statements use IF NOT EXISTS. ALTERS run only when the column is missing.
+ */
+export const SCHEMA_VERSION = "7";
 
-/** One-time role rename. Safe to run more than once. */
+/** Idempotent. A second run changes no row once every legacy `user` is `comercial`. */
 export const COMMERCIAL_ROLE_SQL = "UPDATE users SET role = 'comercial' WHERE role = 'user'";
 
 /** Applied when an older local file is missing columns added after the first release. */

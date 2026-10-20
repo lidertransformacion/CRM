@@ -7,7 +7,10 @@ import type { Actor } from "@/lib/legal/access";
 import { deleteFile, storePdf, uploadDriveFile } from "@/lib/legal/drive";
 import { setLegalFilesBucketForTests, type LegalBucket } from "@/lib/legal/storage";
 import { STORAGE_LIMIT_BYTES, storageLabel, storageLevel } from "@/lib/storage/format";
+import { deleteMailFile, saveMailFile, setMailFilesBucketForTests } from "@/lib/mail/files";
 import { readUsage, recalculateUsage, releaseBytes, reserveBytes, setExtraStorageBucketsForTests, type StorageBucket } from "@/lib/storage/quota";
+import { blankVisit } from "@/lib/visits/model";
+import { deleteVisit, saveVisit } from "@/lib/visits/store";
 import { wrapDatabaseSync } from "@/lib/sql/node";
 import type { SqlDb } from "@/lib/sql/types";
 
@@ -19,8 +22,18 @@ class MemoryBucket implements LegalBucket, StorageBucket {
     copy.set(bytes);
     this.objects.set(key, copy);
   }
-  async get() {
-    return null;
+  async get(key: string) {
+    const bytes = this.objects.get(key);
+    if (!bytes) return null;
+    const copy = new Uint8Array(bytes.byteLength);
+    copy.set(bytes);
+    return {
+      body: new ReadableStream(),
+      size: copy.byteLength,
+      async arrayBuffer() {
+        return copy.buffer.slice(copy.byteOffset, copy.byteOffset + copy.byteLength);
+      },
+    };
   }
   async delete(key: string) {
     this.objects.delete(key);
@@ -50,6 +63,7 @@ describe("storage quota", () => {
   afterEach(() => {
     setLegalFilesBucketForTests(null);
     setExtraStorageBucketsForTests(null);
+    setMailFilesBucketForTests(undefined);
     for (const file of created) fs.rmSync(file, { force: true });
     created.length = 0;
   });
@@ -90,7 +104,7 @@ describe("storage quota", () => {
     const contracts = new MemoryBucket();
     const mail = new MemoryBucket();
     setLegalFilesBucketForTests(contracts);
-    setExtraStorageBucketsForTests({ MAIL_FILES: mail, VISIT_PHOTOS: null });
+    setExtraStorageBucketsForTests({ MAIL_FILES: mail });
     const actor: Actor = { uid: 1, email: "admin@libertariocoffee.com", role: "admin", ip: null, userAgent: "vitest" };
     const bytes = new TextEncoder().encode("%PDF-1.4 firmado");
     const stored = await storePdf(db, actor, { name: "firmado.pdf", mime: "application/pdf", bytes, kind: "contract_signed" });
@@ -103,8 +117,44 @@ describe("storage quota", () => {
     await contracts.put("files/extra", new Uint8Array(7));
     await reserveBytes(db, 1000);
     const rebuilt = await recalculateUsage(db);
-    expect(rebuilt.buckets.map((item) => item.label)).toEqual(["Contratos", "Correos"]);
+    expect(rebuilt.buckets.map((item) => item.label)).toEqual(["Contratos", "Correos y visitas"]);
     expect(rebuilt.bytesUsed).toBe(bytes.byteLength + 7 + 5);
     expect((await readUsage(db)).bytesUsed).toBe(bytes.byteLength + 7 + 5);
+  });
+
+  it("reserves mail attachments and visit photos in the same bucket and releases them", async () => {
+    const { file, db } = await tempDb();
+    created.push(file);
+    const mail = new MemoryBucket();
+    setMailFilesBucketForTests(mail);
+    setExtraStorageBucketsForTests({ MAIL_FILES: mail });
+    const saved = await saveMailFile(db, 4, { filename: "logo.png", contentType: "image/png", bytes: new Uint8Array([1, 2, 3, 4]) });
+    expect(saved.r2_key?.startsWith("mail/4/")).toBe(true);
+    expect((await readUsage(db)).bytesUsed).toBe(4);
+
+    const visit = blankVisit({
+      id: "visit-quota-1",
+      status: "borrador",
+      cliente: "CAFE",
+      sede: "Norte",
+      fotos: [{ tag: "Antes", src: "data:image/jpeg;base64,AAAA" }],
+    });
+    await saveVisit(db, visit, 4);
+    const photoKey = [...mail.objects.keys()].find((key) => key.startsWith("visits/visit-quota-1/"));
+    expect(photoKey).toBeTruthy();
+    const photoBytes = mail.objects.get(photoKey!)!.byteLength;
+    expect((await readUsage(db)).bytesUsed).toBe(4 + photoBytes);
+
+    await saveVisit(db, visit, 4);
+    expect((await readUsage(db)).bytesUsed).toBe(4 + photoBytes);
+
+    await deleteMailFile(db, 4, saved.id);
+    await deleteVisit(db, visit.id);
+    expect(mail.objects.size).toBe(0);
+    expect((await readUsage(db)).bytesUsed).toBe(0);
+
+    const rebuilt = await recalculateUsage(db);
+    expect(rebuilt.buckets.map((item) => item.label)).toEqual(["Correos y visitas"]);
+    expect(rebuilt.bytesUsed).toBe(0);
   });
 });

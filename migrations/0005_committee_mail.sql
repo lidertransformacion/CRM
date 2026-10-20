@@ -1,9 +1,7 @@
 -- Committee summary mail.
 -- body_html keeps the red-row table. cc_email is the optional copy list.
--- ALTER TABLE is not idempotent. If the Worker already added the columns, skip
--- the two ALTER statements and run the CREATE TABLE statements.
-ALTER TABLE email_outbox ADD COLUMN body_html TEXT;
-ALTER TABLE email_outbox ADD COLUMN cc_email TEXT;
+-- Those columns are added by Worker boot only when PRAGMA table_info does not list them.
+-- SQLite has no ADD COLUMN IF NOT EXISTS, so this file does not ALTER and can run twice.
 
 CREATE TABLE IF NOT EXISTS mail_favorites (
   id INTEGER PRIMARY KEY,

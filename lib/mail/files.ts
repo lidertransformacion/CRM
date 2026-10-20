@@ -1,6 +1,7 @@
 import { HttpError } from "@/lib/auth/users";
 import { MAX_D1_FILE_BYTES, MAX_MAIL_BYTES, fileIdsInHtml, rewriteFileSrc } from "@/lib/mail/html";
 import type { MailPart } from "@/lib/mail/message";
+import { releaseBytes, reserveBytes } from "@/lib/storage/quota";
 import type { SqlDb } from "@/lib/sql/types";
 
 export type MailFileRow = {
@@ -59,12 +60,22 @@ export function assertMailSize(sizes: number[]): void {
   }
 }
 
-export function mailFilesBucket(): MailBucket | null {
+let bucketOverride: MailBucket | null | undefined;
+
+/** `undefined` clears the override. Tests and visit photos use the same bucket. */
+export function setMailFilesBucketForTests(bucket: MailBucket | null | undefined) {
+  bucketOverride = bucket;
+}
+
+/** Binding `MAIL_FILES`, bucket `crm-libertario-mail`. Visit photos use the `visits/` prefix in this bucket. */
+export async function mailFilesBucket(): Promise<MailBucket | null> {
+  if (bucketOverride !== undefined) return bucketOverride;
   if (process.env.VITEST) return null;
   try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const { env } = require("cloudflare:workers") as { env?: { MAIL_FILES?: MailBucket } };
-    return env?.MAIL_FILES ?? null;
+    const { env } = await import("cloudflare:workers");
+    const bucket = (env as { MAIL_FILES?: MailBucket }).MAIL_FILES;
+    if (!bucket || typeof bucket.put !== "function") return null;
+    return bucket;
   } catch {
     return null;
   }
@@ -94,7 +105,7 @@ export async function saveMailFile(
   const normalized = normalizeUpload(input.filename, input.contentType);
   if (!input.bytes.byteLength) throw new HttpError(400, "El archivo está vacío.");
   assertMailSize([input.bytes.byteLength]);
-  const bucket = mailFilesBucket();
+  const bucket = await mailFilesBucket();
   if (!bucket && input.bytes.byteLength > MAX_D1_FILE_BYTES) {
     throw new HttpError(400, "Ese archivo necesita el depósito R2 MAIL_FILES. Sin él solo caben archivos de hasta 400 KB.");
   }
@@ -103,23 +114,42 @@ export async function saveMailFile(
   const now = new Date().toISOString();
   let r2Key: string | null = null;
   let data: string | null = null;
+  const size = input.bytes.byteLength;
   if (bucket) {
     r2Key = `mail/${userId}/${id}`;
-    await bucket.put(r2Key, input.bytes, { httpMetadata: { contentType: normalized.contentType } });
+    await reserveBytes(db, size);
+    try {
+      await bucket.put(r2Key, input.bytes, { httpMetadata: { contentType: normalized.contentType } });
+    } catch (error) {
+      await releaseBytes(db, size);
+      throw error;
+    }
   } else {
     data = bytesToBase64(input.bytes);
   }
-  await db.run(
-    `INSERT INTO mail_files (id, user_id, filename, content_type, size_bytes, r2_key, data_base64, content_id, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [id, userId, normalized.filename, normalized.contentType, input.bytes.byteLength, r2Key, data, contentId, now],
-  );
+  try {
+    await db.run(
+      `INSERT INTO mail_files (id, user_id, filename, content_type, size_bytes, r2_key, data_base64, content_id, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [id, userId, normalized.filename, normalized.contentType, size, r2Key, data, contentId, now],
+    );
+  } catch (error) {
+    if (bucket && r2Key) {
+      try {
+        await bucket.delete(r2Key);
+      } catch {
+        // The reservation is released below even if the object is already gone.
+      }
+      await releaseBytes(db, size);
+    }
+    throw error;
+  }
   return {
     id,
     user_id: userId,
     filename: normalized.filename,
     content_type: normalized.contentType,
-    size_bytes: input.bytes.byteLength,
+    size_bytes: size,
     r2_key: r2Key,
     data_base64: data,
     content_id: contentId,
@@ -131,7 +161,7 @@ export async function readMailFile(db: SqlDb, id: string): Promise<{ row: MailFi
   const row = await db.get<MailFileRow>("SELECT * FROM mail_files WHERE id = ?", [id]);
   if (!row) return null;
   if (row.r2_key) {
-    const bucket = mailFilesBucket();
+    const bucket = await mailFilesBucket();
     if (!bucket) throw new HttpError(500, "Falta el depósito de archivos.");
     const object = await bucket.get(row.r2_key);
     if (!object) return null;
@@ -145,8 +175,10 @@ export async function deleteMailFile(db: SqlDb, userId: number, id: string): Pro
   const row = await db.get<MailFileRow>("SELECT * FROM mail_files WHERE id = ? AND user_id = ?", [id, userId]);
   if (!row) throw new HttpError(404, "Ese archivo no está.");
   if (row.r2_key) {
-    const bucket = mailFilesBucket();
-    if (bucket) await bucket.delete(row.r2_key);
+    const bucket = await mailFilesBucket();
+    if (!bucket) throw new HttpError(500, "Falta el depósito de archivos.");
+    await bucket.delete(row.r2_key);
+    await releaseBytes(db, row.size_bytes);
   }
   await db.run("DELETE FROM mail_files WHERE id = ? AND user_id = ?", [id, userId]);
 }

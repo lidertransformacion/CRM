@@ -54,7 +54,7 @@ Every page and API route requires a signed `crm_session` cookie. Public routes a
 
 Production deploys from `main` through Cloudflare Workers Builds. The dashboard Git integration creates its own API token. This repository has no GitHub Actions workflow and no Cloudflare token. The exact dashboard fields are in [docs/deploy-cloudflare.md](docs/deploy-cloudflare.md).
 
-The Worker name is `crm-libertario`. The D1 binding `DB` is the existing database `crm-pay-line` (`ded1c012-2e0a-4b1b-9339-24047b32a99e`). Contract PDFs use the R2 binding `LEGAL_FILES` (bucket `crm-legal-files`, already created). Mail attachments (`MAIL_FILES`) and visit photos (`VISIT_PHOTOS`) share the same 10 GB cap when those bindings exist. D1 keeps one byte counter (`storage_usage`). Uploads that would pass 10 GB are rejected. An admin can rebuild the counter from an R2 listing at `/ajustes/almacen`.
+The Worker name is `crm-libertario`. The D1 binding `DB` is the existing database `crm-pay-line` (`ded1c012-2e0a-4b1b-9339-24047b32a99e`). Contract PDFs use the R2 binding `LEGAL_FILES` (bucket `crm-legal-files`, already created). Mail attachments and visit photos use the R2 binding `MAIL_FILES` (bucket `crm-libertario-mail`, already created). Visit photos are objects under the `visits/` prefix. Both buckets share one 10 GB cap. D1 keeps the counter in `storage_usage`. Uploads that would pass 10 GB are rejected. An admin can rebuild the counter from an R2 listing at `/ajustes/almacen`.
 
 `MAIL_MODE` is `gmail_api` and `SHEETS_SYNC_ENABLED` is `false`. Secrets stay out of `wrangler.jsonc`. There is no new secret for contracts or the quota. `MAIL_TEST_MODE` is unchanged.
 
@@ -109,7 +109,9 @@ Binding: D1 database `crm-pay-line` as `DB`.
 - **Clientes** — Timeline of opportunities, activities, committee items, and comodatos.
 - **Correos** — Spanish drafts with a rich editor, inline images, and attachments. **Procesar bandeja** follows `MAIL_MODE`. A user with Gmail connected on **Cuenta** sends as that account. Otherwise production `gmail_api` uses the shared mailbox. Test mode (the default) does not deliver to the customer. `log` leaves the message queued. See [docs/rich-mail.md](docs/rich-mail.md).
 - **Visitas** — Hospitality visit reports, weekly coverage, PDF, and `LIBV1.` import. See [docs/visits.md](docs/visits.md).
-- **Ajustes** — Admins create users and can remove someone from the team.
+- **Contratos** — In-CRM folders and contract records linked to deals and equipment.
+- **Gerencia** — Placeholder dashboard for admin and gerencia.
+- **Ajustes** — Admins create users, choose a role, and can remove someone from the team. Storage usage is on **Almacen**.
 - **Cuenta** — Password change and **Conectar Gmail**.
 
 Rules and the sheet adapter are in [docs/process.md](docs/process.md).
