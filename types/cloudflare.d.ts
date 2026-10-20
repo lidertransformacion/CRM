@@ -56,6 +56,11 @@ interface LegalObjectBucket {
   ): Promise<unknown>;
   get(key: string): Promise<LegalStoredObject | null>;
   delete(key: string): Promise<void>;
+  list(options?: { limit?: number; cursor?: string; prefix?: string }): Promise<{
+    objects: { key: string; size: number }[];
+    truncated?: boolean;
+    cursor?: string;
+  }>;
 }
 
 interface LegalStoredObject {

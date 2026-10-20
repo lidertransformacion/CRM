@@ -53,13 +53,9 @@ Every page and API route requires a signed `crm_session` cookie. Public routes a
 
 Production deploys from `main` through Cloudflare Workers Builds. The dashboard Git integration creates its own API token. This repository has no GitHub Actions workflow and no Cloudflare token. The exact dashboard fields are in [docs/deploy-cloudflare.md](docs/deploy-cloudflare.md).
 
-The Worker name is `crm-libertario`. The D1 binding `DB` is the existing database `crm-pay-line` (`ded1c012-2e0a-4b1b-9339-24047b32a99e`). Contract PDFs use the R2 binding `LEGAL_FILES` (bucket `crm-legal-files`). Create that bucket before the next production deploy; this repository does not create it:
+The Worker name is `crm-libertario`. The D1 binding `DB` is the existing database `crm-pay-line` (`ded1c012-2e0a-4b1b-9339-24047b32a99e`). Contract PDFs use the R2 binding `LEGAL_FILES` (bucket `crm-legal-files`, already created). Mail attachments (`MAIL_FILES`) and visit photos (`VISIT_PHOTOS`) share the same 10 GB cap when those bindings exist. D1 keeps one byte counter (`storage_usage`). Uploads that would pass 10 GB are rejected. An admin can rebuild the counter from an R2 listing at `/ajustes/almacen`.
 
-```bash
-npx wrangler r2 bucket create crm-legal-files
-```
-
-`MAIL_MODE` is `gmail_api` and `SHEETS_SYNC_ENABLED` is `false`. Secrets stay out of `wrangler.jsonc`. There is no new secret for contracts. `MAIL_TEST_MODE` is unchanged.
+`MAIL_MODE` is `gmail_api` and `SHEETS_SYNC_ENABLED` is `false`. Secrets stay out of `wrangler.jsonc`. There is no new secret for contracts or the quota. `MAIL_TEST_MODE` is unchanged.
 
 Set a secret from a trusted machine. Wrangler prompts for the value.
 
