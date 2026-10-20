@@ -1,15 +1,17 @@
 "use client";
 
 import { Copy, RotateCcw, Send } from "lucide-react";
+import { AttachmentBar } from "@/components/emails/AttachmentBar";
+import { RichTextEditor } from "@/components/emails/RichTextEditor";
+import { StepHeader } from "@/components/emails/StepHeader";
+import type { UploadedFile } from "@/components/emails/upload";
+import type { FieldKey, ResolvedField } from "@/components/emails/fields";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardBody, CardFooter, CardHeader } from "@/components/ui/card";
 import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
 import { Tooltip } from "@/components/ui/tooltip";
-import { StepHeader } from "@/components/emails/StepHeader";
-import type { FieldKey, ResolvedField } from "@/components/emails/fields";
 
 /** Paso 3: asunto y cuerpo editables. Copiar sigue disponible; encolar deja el correo en la bandeja. */
 export function DraftEditor({
@@ -31,6 +33,12 @@ export function DraftEditor({
   onCopyAll,
   onCopySubject,
   onEnqueue,
+  attachments,
+  attachmentBytes,
+  attachmentPending,
+  onAddAttachment,
+  onRemoveAttachment,
+  onImageUploaded,
 }: {
   subject: string;
   body: string;
@@ -50,6 +58,12 @@ export function DraftEditor({
   onCopyAll: () => void;
   onCopySubject: () => void;
   onEnqueue: () => void;
+  attachments: UploadedFile[];
+  attachmentBytes: number;
+  attachmentPending: boolean;
+  onAddAttachment: (file: File) => void;
+  onRemoveAttachment: (id: string) => void;
+  onImageUploaded: (file: { id: string; size: number }) => void;
 }) {
   const used = fields.filter((field) => usedKeys.includes(field.key));
   const generic = used.filter((field) => field.generic).length;
@@ -73,9 +87,10 @@ export function DraftEditor({
         <Field label="Asunto" htmlFor="draft-subject">
           <Input id="draft-subject" value={subject} onChange={(event) => onSubjectChange(event.target.value)} />
         </Field>
-        <Field label="Cuerpo" htmlFor="draft-body">
-          <Textarea id="draft-body" value={body} onChange={(event) => onBodyChange(event.target.value)} className="min-h-[340px] font-sans max-sm:min-h-[300px]" spellCheck />
+        <Field label="Cuerpo" htmlFor="draft-body" hint="Negrita, listas, color, tablas e imágenes. Los archivos van abajo.">
+          <RichTextEditor id="draft-body" value={body} onChange={onBodyChange} onImageUploaded={onImageUploaded} />
         </Field>
+        <AttachmentBar files={attachments} totalBytes={attachmentBytes} pending={attachmentPending} onAdd={onAddAttachment} onRemove={onRemoveAttachment} />
         <div className="rounded-lg border border-line-2 bg-surface-2 px-3.5 py-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <p className="text-xs font-medium text-ink-2">Datos usados en esta plantilla</p>

@@ -191,7 +191,8 @@ CREATE TABLE IF NOT EXISTS email_outbox (
   next_attempt_at TEXT,
   sender_user_id INTEGER,
   body_html TEXT,
-  cc_email TEXT
+  cc_email TEXT,
+  attachment_ids TEXT
 );
 CREATE UNIQUE INDEX IF NOT EXISTS email_outbox_dedupe ON email_outbox(dedupe_key);
 CREATE TABLE IF NOT EXISTS gmail_tokens (
@@ -272,10 +273,22 @@ CREATE TABLE IF NOT EXISTS committee_email_log (
   test_mode INTEGER NOT NULL DEFAULT 1
 );
 CREATE INDEX IF NOT EXISTS committee_email_log_user ON committee_email_log(user_id, at);
+CREATE TABLE IF NOT EXISTS mail_files (
+  id TEXT PRIMARY KEY,
+  user_id INTEGER NOT NULL,
+  filename TEXT NOT NULL,
+  content_type TEXT NOT NULL,
+  size_bytes INTEGER NOT NULL,
+  r2_key TEXT,
+  data_base64 TEXT,
+  content_id TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS mail_files_user ON mail_files(user_id);
 `;
 
 /** Bump when SCHEMA gains indexes or columns so an existing D1 applies them once. */
-export const SCHEMA_VERSION = "5";
+export const SCHEMA_VERSION = "6";
 
 /** Applied when an older local file is missing columns added after the first release. */
 export const ALTERS = [
@@ -293,6 +306,7 @@ export const ALTERS = [
   "ALTER TABLE email_outbox ADD COLUMN sender_user_id INTEGER",
   "ALTER TABLE email_outbox ADD COLUMN body_html TEXT",
   "ALTER TABLE email_outbox ADD COLUMN cc_email TEXT",
+  "ALTER TABLE email_outbox ADD COLUMN attachment_ids TEXT",
 ];
 
 export { splitSqlStatements as splitSql } from "@/lib/sql/statements";

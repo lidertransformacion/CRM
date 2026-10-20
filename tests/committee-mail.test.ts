@@ -99,7 +99,7 @@ describe("committee summary mail", () => {
       [result.outboxId],
     );
     expect(stored?.subject).toBe("Comité Out of Stores · 14 oct · Decisiones y pendientes");
-    expect(stored?.body_html).toContain("background:#fde8e8");
+    expect(stored?.body_html).toContain("#fde8e8");
     expect(stored?.body_html).toContain("<table");
     expect(stored?.to_email).toBe("equipo.uno@libertariocoffee.com");
     expect(stored?.cc_email).toBe("equipo.dos@libertariocoffee.com");
@@ -127,7 +127,7 @@ describe("committee summary mail", () => {
         return "test-provider";
       },
     });
-    expect(seen[0]?.html).toContain("background:#fde8e8");
+    expect(seen[0]?.html).toContain("#fde8e8");
     expect(seen[0]?.cc).toBe("equipo.dos@libertariocoffee.com");
     expect(seen[0]?.to).toBe("equipo.uno@libertariocoffee.com");
   });

@@ -39,11 +39,13 @@ export async function POST(request: Request) {
     await hydrateProcessEnv();
     const db = await getSql();
     const session = await requireSession(request, db);
-    const body = (await request.json()) as { to?: string; subject?: string; body?: string; dedupeKey?: string | null; resend?: boolean };
+    const body = (await request.json()) as { to?: string; subject?: string; body?: string; html?: string; attachmentIds?: string[]; dedupeKey?: string | null; resend?: boolean };
     const queued = await enqueueEmail(db, {
       to: body.to ?? "",
       subject: body.subject ?? "",
       body: body.body ?? "",
+      html: body.html,
+      attachmentIds: body.attachmentIds ?? [],
       dedupeKey: body.dedupeKey,
       resend: body.resend === true,
       senderUserId: session.uid,

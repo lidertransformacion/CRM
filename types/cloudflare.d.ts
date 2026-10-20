@@ -1,6 +1,8 @@
 declare module "cloudflare:workers" {
   export const env: {
     DB?: D1Database;
+    /** Mail attachments and inline images. Bucket crm-libertario-mail. */
+    MAIL_FILES?: MailObjectBucket;
     APP_KV?: KVNamespace;
     /** OAuth web client id. Worker secret. Never commit a value. */
     GOOGLE_CLIENT_ID?: string;
@@ -38,6 +40,12 @@ interface D1Database {
   prepare(sql: string): D1Prepared;
   batch(statements: D1Prepared[]): Promise<D1Result[]>;
   exec(sql: string): Promise<unknown>;
+}
+
+interface MailObjectBucket {
+  put(key: string, value: ArrayBuffer | Uint8Array, options?: { httpMetadata?: { contentType?: string } }): Promise<unknown>;
+  get(key: string): Promise<{ arrayBuffer(): Promise<ArrayBuffer> } | null>;
+  delete(key: string): Promise<void>;
 }
 
 interface KVNamespace {

@@ -2,6 +2,7 @@ import { HttpError, recipientOptedOut } from "@/lib/auth/users";
 import { committeeByNumber } from "@/lib/db";
 import { buildCommitteeEmail } from "@/lib/committee/email";
 import { splitAddresses } from "@/lib/mail/addresses";
+import { htmlToText, sanitizeEmailHtml } from "@/lib/mail/html";
 import { mailMode, mailTestMode } from "@/lib/mail/message";
 import { enqueueEmail, processOutbox } from "@/lib/mail/outbox";
 import type { SqlDb } from "@/lib/sql/types";
@@ -25,7 +26,7 @@ export type CommitteeSendResult = {
 export async function sendCommitteeSummary(
   db: SqlDb,
   actorId: number,
-  input: { committeeNumber: number; to: string[] | string; cc?: string[] | string | null; asOf?: string },
+  input: { committeeNumber: number; to: string[] | string; cc?: string[] | string | null; asOf?: string; html?: string | null; attachmentIds?: string[] | null },
 ): Promise<CommitteeSendResult> {
   const number = input.committeeNumber;
   if (!Number.isInteger(number) || number <= 0) throw new HttpError(400, "Comité inválido.");
@@ -40,12 +41,15 @@ export async function sendCommitteeSummary(
     if (await recipientOptedOut(db, email)) throw new HttpError(400, `${email} optó por no recibir correos.`);
   }
   const email = buildCommitteeEmail(doc, asOf);
+  const html = input.html?.trim() ? sanitizeEmailHtml(input.html) : email.html;
+  const text = input.html?.trim() ? htmlToText(html) : email.text;
   const queued = await enqueueEmail(db, {
     to,
     cc,
     subject: email.subject,
-    body: email.text,
-    html: email.html,
+    body: text || email.text,
+    html,
+    attachmentIds: input.attachmentIds ?? [],
     senderUserId: actorId,
   });
   await processOutbox(db, { ids: [queued.id] });

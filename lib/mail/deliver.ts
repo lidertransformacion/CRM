@@ -1,7 +1,7 @@
 import { readEnv } from "@/lib/env";
 import { connectedRefreshToken, markGmailDisconnected } from "@/lib/google/tokens";
 import { GmailAuthError, sendGmail, sendGmailMessage } from "@/lib/mail/gmail";
-import { applyTestRedirect, fromIdentity, mailMode, mailTestMode, textToHtml, type OutboundMail } from "@/lib/mail/message";
+import { applyTestRedirect, fromIdentity, mailMode, mailTestMode, textToHtml, type MailPart, type OutboundMail } from "@/lib/mail/message";
 import type { SqlDb } from "@/lib/sql/types";
 
 export type DeliverInput = {
@@ -10,6 +10,7 @@ export type DeliverInput = {
   subject: string;
   text: string;
   html?: string;
+  parts?: MailPart[];
   senderUserId?: number | null;
   db?: SqlDb;
 };
@@ -36,6 +37,7 @@ export async function deliverMail(input: DeliverInput, fetchImpl: typeof fetch =
     subject: input.subject,
     text: input.text,
     html: input.html,
+    parts: input.parts,
     fromAddress: shared.address,
     fromName: shared.name,
   };
