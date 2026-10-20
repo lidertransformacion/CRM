@@ -19,6 +19,7 @@ export function DraftEditor({
   fields,
   usedKeys,
   fromLabel,
+  testMode,
   recipient,
   resend,
   enqueuePending,
@@ -37,6 +38,7 @@ export function DraftEditor({
   fields: ResolvedField[];
   usedKeys: FieldKey[];
   fromLabel: string;
+  testMode?: boolean;
   recipient: string;
   resend: boolean;
   enqueuePending: boolean;
@@ -106,6 +108,7 @@ export function DraftEditor({
             <Input id="draft-to" type="email" value={recipient} onChange={(event) => onRecipientChange(event.target.value)} placeholder="cliente@correo.com" />
           </Field>
           <p className="text-[11px] text-ink-3">Sale como {fromLabel}</p>
+          {testMode && <p className="text-[11px] text-ink-3">Modo de prueba: el cliente no recibe este correo.</p>}
           <label className="flex items-center gap-2 text-xs text-ink-2">
             <input type="checkbox" checked={resend} onChange={(event) => onResendChange(event.target.checked)} />
             Volver a encolar si ya estaba

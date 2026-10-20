@@ -31,15 +31,17 @@ export function OutboxPanel({ refreshKey }: { refreshKey: number }) {
   const { toast } = useToast();
   const [messages, setMessages] = useState<OutboxMessage[]>([]);
   const [mode, setMode] = useState<string>("log");
+  const [testMode, setTestMode] = useState(true);
   const [loading, setLoading] = useState(true);
   const [processing, setProcessing] = useState(false);
 
   const load = useCallback(async () => {
     const response = await fetch("/api/correos/outbox");
     if (!response.ok) throw new Error("No se pudo leer la bandeja.");
-    const body = (await response.json()) as { messages: OutboxMessage[]; mode: string };
+    const body = (await response.json()) as { messages: OutboxMessage[]; mode: string; testMode?: boolean };
     setMessages(body.messages);
     setMode(body.mode);
+    setTestMode(body.testMode !== false);
   }, []);
 
   useEffect(() => {
@@ -94,11 +96,13 @@ export function OutboxPanel({ refreshKey }: { refreshKey: number }) {
       <CardHeader
         title="Bandeja de salida"
         description={
-          mode === "log"
-            ? "El modo actual es registro. Los correos quedan en cola y no se envían."
-            : mode === "gmail_api"
-              ? "El modo actual envía por la API de Gmail."
-              : "El modo actual usa SMTP."
+          testMode && mode !== "log"
+            ? "Modo de prueba: el correo llega a tu cuenta, no al cliente."
+            : mode === "log"
+              ? "El modo actual es registro. Los correos quedan en cola y no se envían."
+              : mode === "gmail_api"
+                ? "El modo actual envía por la API de Gmail."
+                : "El modo actual usa SMTP."
         }
         actions={
           <Button variant="secondary" size="sm" onClick={() => void processQueue()} loading={processing} disabled={processing}>

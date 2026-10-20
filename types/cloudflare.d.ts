@@ -2,6 +2,23 @@ declare module "cloudflare:workers" {
   export const env: {
     DB?: D1Database;
     APP_KV?: KVNamespace;
+    /** OAuth web client id. Worker secret. Never commit a value. */
+    GOOGLE_CLIENT_ID?: string;
+    /** OAuth web client secret. Worker secret. Never commit a value. */
+    GOOGLE_CLIENT_SECRET?: string;
+    /**
+     * AES-GCM key for gmail_tokens.refresh_token.
+     * Prefer 32 bytes, base64-encoded (`openssl rand -base64 32`). Any other
+     * string of at least 16 characters is hashed with SHA-256. Worker secret.
+     */
+    TOKEN_ENC_KEY?: string;
+    /** Optional exact redirect URI. Defaults to the request origin + /api/auth/google/callback. */
+    GOOGLE_REDIRECT_URI?: string;
+    /**
+     * Email safety switch. Unset or any value other than "false" keeps test mode:
+     * mail is not delivered to the customer. Set the secret to "false" to send for real.
+     */
+    MAIL_TEST_MODE?: string;
   } & Record<string, unknown>;
 }
 

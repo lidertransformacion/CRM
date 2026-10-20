@@ -11,6 +11,14 @@ export async function middleware(request: NextRequest) {
   }
   const session = await readSessionFromRequest(request);
   if (!session) {
+    // Google sends the browser here. A JSON 401 would be a dead end, so send them to sign in.
+    if (pathname === "/api/auth/google/callback") {
+      const url = request.nextUrl.clone();
+      url.pathname = "/login";
+      url.search = "";
+      url.searchParams.set("next", "/cuenta");
+      return NextResponse.redirect(url);
+    }
     if (pathname.startsWith("/api/")) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
     const url = request.nextUrl.clone();
     url.pathname = "/login";

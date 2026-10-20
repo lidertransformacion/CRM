@@ -1,11 +1,20 @@
-import { base64Url, rfc822, type OutboundMail } from "@/lib/mail/message";
 import { readEnv } from "@/lib/env";
+import { base64Url, rfc822, textToHtml, type OutboundMail } from "@/lib/mail/message";
 
 export type GmailToken = {
   client_id: string;
   client_secret: string;
   refresh_token: string;
 };
+
+export class GmailAuthError extends Error {
+  constructor(
+    message: string,
+    public code: string,
+  ) {
+    super(message);
+  }
+}
 
 export function parseGmailToken(raw: string): GmailToken {
   let parsed: Partial<GmailToken>;
@@ -32,23 +41,39 @@ export async function gmailAccessToken(token: GmailToken, fetchImpl: typeof fetc
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body,
   });
-  if (!response.ok) throw new Error("Google rechazó el refresh token de Gmail.");
-  const json = (await response.json()) as { access_token?: string };
+  const json = (await response.json().catch(() => ({}))) as { access_token?: string; error?: string };
+  if (!response.ok) {
+    if (json.error === "invalid_grant") throw new GmailAuthError("Google invalidó el permiso de Gmail.", "invalid_grant");
+    throw new GmailAuthError("Google rechazó el refresh token de Gmail.", json.error || "refresh_failed");
+  }
   if (!json.access_token) throw new Error("Google no devolvió access_token.");
   return json.access_token;
 }
 
-export async function sendGmail(message: OutboundMail, fetchImpl: typeof fetch = fetch): Promise<string> {
-  const raw = await readEnv("GMAIL_TOKEN_JSON");
-  if (!raw.trim()) throw new Error("Falta GMAIL_TOKEN_JSON.");
-  const access = await gmailAccessToken(parseGmailToken(raw), fetchImpl);
-  // The refresh token only includes gmail.send, so this is the only Gmail call.
+function withHtml(message: OutboundMail): OutboundMail {
+  return message.html ? message : { ...message, html: textToHtml(message.text) };
+}
+
+/** users.messages.send. The only Gmail call; the token's send scope cannot read the mailbox. */
+export async function sendGmailMessage(message: OutboundMail, token: GmailToken, fetchImpl: typeof fetch = fetch): Promise<string> {
+  const access = await gmailAccessToken(token, fetchImpl);
   const response = await fetchImpl("https://gmail.googleapis.com/gmail/v1/users/me/messages/send", {
     method: "POST",
     headers: { Authorization: `Bearer ${access}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ raw: base64Url(rfc822(message)) }),
+    body: JSON.stringify({ raw: base64Url(rfc822(withHtml(message))) }),
   });
-  if (!response.ok) throw new Error("Gmail rechazó el mensaje.");
+  if (!response.ok) {
+    const json = (await response.json().catch(() => ({}))) as { error?: { status?: string; message?: string } };
+    if (response.status === 401) throw new GmailAuthError("Google invalidó el permiso de Gmail.", "invalid_grant");
+    throw new Error(json.error?.message || "Gmail rechazó el mensaje.");
+  }
   const json = (await response.json()) as { id?: string };
   return json.id ?? "gmail";
+}
+
+/** Shared mailbox fallback. Uses GMAIL_TOKEN_JSON, not a per-user row. */
+export async function sendGmail(message: OutboundMail, fetchImpl: typeof fetch = fetch): Promise<string> {
+  const raw = await readEnv("GMAIL_TOKEN_JSON");
+  if (!raw.trim()) throw new Error("Falta GMAIL_TOKEN_JSON.");
+  return sendGmailMessage(message, parseGmailToken(raw), fetchImpl);
 }

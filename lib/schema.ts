@@ -188,9 +188,17 @@ CREATE TABLE IF NOT EXISTS email_outbox (
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   sent_at TEXT,
-  next_attempt_at TEXT
+  next_attempt_at TEXT,
+  sender_user_id INTEGER
 );
 CREATE UNIQUE INDEX IF NOT EXISTS email_outbox_dedupe ON email_outbox(dedupe_key);
+CREATE TABLE IF NOT EXISTS gmail_tokens (
+  user_id INTEGER NOT NULL UNIQUE,
+  google_email TEXT NOT NULL,
+  refresh_token TEXT NOT NULL,
+  connected_at TEXT NOT NULL,
+  status TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS odoo_outbound (
   id INTEGER PRIMARY KEY,
   kind TEXT NOT NULL,
@@ -239,7 +247,7 @@ CREATE INDEX IF NOT EXISTS committee_docs_number ON committee_docs(number);
 `;
 
 /** Bump when SCHEMA gains indexes or columns so an existing D1 applies them once. */
-export const SCHEMA_VERSION = "3";
+export const SCHEMA_VERSION = "4";
 
 /** Applied when an older local file is missing columns added after the first release. */
 export const ALTERS = [
@@ -254,6 +262,7 @@ export const ALTERS = [
   "ALTER TABLE users ADD COLUMN email_opt_out INTEGER NOT NULL DEFAULT 0",
   "ALTER TABLE users ADD COLUMN session_version INTEGER NOT NULL DEFAULT 1",
   "ALTER TABLE users ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0",
+  "ALTER TABLE email_outbox ADD COLUMN sender_user_id INTEGER",
 ];
 
 export { splitSqlStatements as splitSql } from "@/lib/sql/statements";

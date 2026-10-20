@@ -200,7 +200,12 @@ describe("middleware", () => {
         expect(response.headers.get("location"), route).toBeNull();
         continue;
       }
-      if (route.startsWith("/api/")) {
+      if (route === "/api/auth/google/callback") {
+        expect(response.status, route).toBe(307);
+        const location = new URL(response.headers.get("location") || "", "http://localhost");
+        expect(location.pathname, route).toBe("/login");
+        expect(location.searchParams.get("next")).toBe("/cuenta");
+      } else if (route.startsWith("/api/")) {
         expect(response.status, route).toBe(401);
         expect(await response.json()).toEqual({ error: "unauthorized" });
       } else {

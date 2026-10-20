@@ -22,6 +22,9 @@
   "triggers": {
     "crons": ["*/5 * * * *"]
   },
+  // Secrets are set in the dashboard or with `wrangler secret put`. Do not commit values.
+  // GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET (already set), TOKEN_ENC_KEY (required before Gmail connect),
+  // MAIL_TEST_MODE (optional; unset means test mode, "false" sends to the real recipient).
   "vars": {
     "MAIL_MODE": "gmail_api",
     "MAIL_FROM_ADDRESS": "lidertransformacion@libertariocoffee.com",

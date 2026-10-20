@@ -51,11 +51,15 @@ The committed `MAIL_MODE` is `gmail_api`, so the cron and each request drain the
 
 Set these in the Worker **crm-libertario**, **Settings** → **Variables and Secrets**. They are not in `wrangler.jsonc` or Git.
 
-Sending uses this secret. `MAIL_MODE` is already the plain var `gmail_api`:
+Sending and per-user Gmail use these secrets. `MAIL_MODE` is already the plain var `gmail_api`:
 
 | Secret | Required when | Value |
 | --- | --- | --- |
-| `GMAIL_TOKEN_JSON` | Sending mail (`MAIL_MODE=gmail_api`) | JSON with `client_id`, `client_secret`, and `refresh_token`. The refresh token is the OAuth token for `lidertransformacion@libertariocoffee.com`. The From address is the var `MAIL_FROM_ADDRESS` (`lidertransformacion@libertariocoffee.com`) and the display name is the var `MAIL_FROM_NAME` (`Comercial Libertario`). |
+| `GMAIL_TOKEN_JSON` | Sending mail when the user has no connected Gmail (`MAIL_MODE=gmail_api`) | JSON with `client_id`, `client_secret`, and `refresh_token`. Fallback sender. The From address is the var `MAIL_FROM_ADDRESS` (`lidertransformacion@libertariocoffee.com`) and the display name is the var `MAIL_FROM_NAME` (`Comercial Libertario`). |
+| `GOOGLE_CLIENT_ID` | Per-user Gmail connect | OAuth web client id. Already set. |
+| `GOOGLE_CLIENT_SECRET` | Per-user Gmail connect | OAuth web client secret. Already set. |
+| `TOKEN_ENC_KEY` | Per-user Gmail connect | AES-GCM key. `openssl rand -base64 32`. Not committed. Required before **Conectar Gmail** works. |
+| `MAIL_TEST_MODE` | Leave unset until real delivery | Unset keeps test mode (the customer is not the recipient). Set the secret to `false` to send to the queued address. |
 
 With `MAIL_MODE=gmail_api`, `POST /api/correos/outbox/process` sends due rows through the Gmail API. A failed attempt is requeued with backoff (1 minute, 5 minutes, 15 minutes, 1 hour) and marked failed after 5 attempts. The cron `*/5 * * * *` drains the outbox, and each request also schedules a drain with `waitUntil` after the response. `MAIL_MODE=log` does neither.
 
@@ -75,6 +79,14 @@ Set these only when the matching feature is turned on:
 | `ODOO_AGENT_TOKEN` | The browser agent calls `/api/agent/*` | Bearer token, at least 16 characters |
 
 Set or rotate one with `npx wrangler secret put <NAME>` from a trusted machine. The command prompts for the value.
+
+Per-user Gmail also needs the D1 migration `migrations/0002_gmail_tokens.sql` on `crm-pay-line` before connect is used:
+
+```bash
+npx wrangler d1 migrations apply crm-pay-line --remote
+```
+
+Setup, the OAuth redirect, test mode, and `TOKEN_ENC_KEY` are in [gmail-per-user.md](gmail-per-user.md).
 
 ## Check a build without publishing
 

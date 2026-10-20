@@ -17,6 +17,7 @@ export type OutboxRow = {
   updated_at: string;
   sent_at: string | null;
   next_attempt_at: string | null;
+  sender_user_id: number | null;
 };
 
 const MAX_ATTEMPTS = 5;
@@ -32,7 +33,7 @@ export function backoffMs(attempts: number): number {
 
 export async function enqueueEmail(
   db: SqlDb,
-  input: { to: string; subject: string; body: string; dedupeKey?: string | null; resend?: boolean },
+  input: { to: string; subject: string; body: string; dedupeKey?: string | null; resend?: boolean; senderUserId?: number | null },
 ): Promise<{ id: number; deduped: boolean; status: string }> {
   const to = input.to.trim();
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)) throw new Error("El destinatario no es un correo.");
@@ -48,16 +49,16 @@ export async function enqueueEmail(
     }
     if (existing && existing.status === "failed") {
       await db.run(
-        `UPDATE email_outbox SET status = 'queued', attempts = 0, last_error = NULL, next_attempt_at = NULL, subject = ?, body_text = ?, to_email = ?, updated_at = ? WHERE id = ?`,
-        [input.subject, input.body, to, now, existing.id],
+        `UPDATE email_outbox SET status = 'queued', attempts = 0, last_error = NULL, next_attempt_at = NULL, subject = ?, body_text = ?, to_email = ?, sender_user_id = ?, updated_at = ? WHERE id = ?`,
+        [input.subject, input.body, to, input.senderUserId ?? null, now, existing.id],
       );
       return { id: existing.id, deduped: false, status: "queued" };
     }
   }
   const inserted = await db.run(
-    `INSERT INTO email_outbox (dedupe_key, to_email, subject, body_text, status, attempts, created_at, updated_at)
-     VALUES (?, ?, ?, ?, 'queued', 0, ?, ?)`,
-    [dedupeKey, to, input.subject.trim(), input.body, now, now],
+    `INSERT INTO email_outbox (dedupe_key, to_email, subject, body_text, status, attempts, created_at, updated_at, sender_user_id)
+     VALUES (?, ?, ?, ?, 'queued', 0, ?, ?, ?)`,
+    [dedupeKey, to, input.subject.trim(), input.body, now, now, input.senderUserId ?? null],
   );
   return { id: inserted.lastInsertRowid, deduped: false, status: "queued" };
 }
@@ -120,7 +121,13 @@ export async function processOutbox(
     const attempt = row.attempts + 1;
     await db.run(`UPDATE email_outbox SET status = 'sending', attempts = ?, updated_at = ? WHERE id = ?`, [attempt, nowIso, row.id]);
     try {
-      const providerId = await deliver({ to: row.to_email, subject: row.subject, text: row.body_text });
+      const providerId = await deliver({
+        to: row.to_email,
+        subject: row.subject,
+        text: row.body_text,
+        senderUserId: row.sender_user_id,
+        db,
+      });
       await db.run(
         `UPDATE email_outbox SET status = 'sent', sent_at = ?, updated_at = ?, provider_message_id = ?, last_error = NULL WHERE id = ?`,
         [nowIso, nowIso, providerId, row.id],

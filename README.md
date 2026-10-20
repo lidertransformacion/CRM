@@ -86,7 +86,11 @@ On the live Worker, a signed-in admin uses Ajustes or `POST /api/users/reset` in
 | `BOOTSTRAP_ADMIN_EMAIL` | var | no | Documented only. The address is fixed in code |
 | `GOOGLE_SHEETS_CLIENT_EMAIL` | secret | when sync is on | Service account. PKCS8 private key |
 | `GOOGLE_SHEETS_PRIVATE_KEY` | secret | when sync is on | Not used while sync is off |
-| `GMAIL_TOKEN_JSON` | secret | when mail is `gmail_api` | OAuth refresh token JSON: `client_id`, `client_secret`, `refresh_token` |
+| `GMAIL_TOKEN_JSON` | secret | when mail is `gmail_api` | Fallback sender when the user has no connected Gmail. JSON: `client_id`, `client_secret`, `refresh_token` |
+| `GOOGLE_CLIENT_ID` | secret | to connect Gmail | OAuth web client id. Already set on the Worker |
+| `GOOGLE_CLIENT_SECRET` | secret | to connect Gmail | OAuth web client secret. Already set on the Worker |
+| `TOKEN_ENC_KEY` | secret | to connect Gmail | AES-GCM key for refresh tokens. `openssl rand -base64 32`. Do not commit a value |
+| `MAIL_TEST_MODE` | secret | no | Unset keeps test mode: customers are not mailed. Set to `false` to deliver to the real recipient |
 | `ODOO_AGENT_TOKEN` | secret | for the browser agent | Bearer token, minimum 16 characters |
 | `CRM_DB_PATH` | local env | no | SQLite path for `next dev` only |
 
@@ -99,9 +103,9 @@ Binding: D1 database `crm-pay-line` as `DB`.
 - **KPIs** — Open, won, and lost follow Odoo `active` and won/lost status, not the stage alone. On the 15 Oct 2026 export: 169 open, 182 won, 309 lost, 39 recurrente.
 - **Comodatos** — 224 machines. **Ver diff** plans against the bundled CSV while sync is off. **Traer de la hoja** and **Enviar cambios** write only when `SHEETS_SYNC_ENABLED=true`. The sheet is the source on pull. Rows are matched by serial and never deleted.
 - **Clientes** — Timeline of opportunities, activities, committee items, and comodatos.
-- **Correos** — Spanish drafts you can copy or queue. **Procesar bandeja** follows `MAIL_MODE`. Production is `gmail_api`: it sends as `Comercial Libertario <lidertransformacion@libertariocoffee.com>` through `users/me/messages/send`, and a cron drains the outbox. `log` leaves the message queued.
+- **Correos** — Spanish drafts you can copy or queue. **Procesar bandeja** follows `MAIL_MODE`. A user with Gmail connected on **Cuenta** sends as that account. Otherwise production `gmail_api` uses the shared mailbox. Test mode (the default) does not deliver to the customer. `log` leaves the message queued.
 - **Ajustes** — Admins create users.
-- **Cuenta** — Password change.
+- **Cuenta** — Password change and **Conectar Gmail**.
 
 Rules and the sheet adapter are in [docs/process.md](docs/process.md).
 
@@ -120,4 +124,4 @@ These routes are in the app. They stay quiet until the matching secret is set. N
 | `GET /api/agent/outbound` | bearer | Pending creates and updates |
 | `POST /api/agent/outbound/:id` | bearer | `{ "odooId" }` or `{ "error" }` |
 
-`GMAIL_TOKEN_JSON` is `{"client_id","client_secret","refresh_token"}`. The live sheet id is `1mrb-s2PbDOEvNwdAs2zMyT7czMxx1tqcYGuwk4FQks4`, tab `Listado Equipos`. The service-account key must be PKCS8 (`BEGIN PRIVATE KEY`). `OdooSyncAdapter` still throws and does not fetch.
+`GMAIL_TOKEN_JSON` is `{"client_id","client_secret","refresh_token"}`. Per-user Gmail is documented in [docs/gmail-per-user.md](docs/gmail-per-user.md). The live sheet id is `1mrb-s2PbDOEvNwdAs2zMyT7czMxx1tqcYGuwk4FQks4`, tab `Listado Equipos`. The service-account key must be PKCS8 (`BEGIN PRIVATE KEY`). `OdooSyncAdapter` still throws and does not fetch.

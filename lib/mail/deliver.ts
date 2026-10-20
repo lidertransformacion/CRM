@@ -1,18 +1,71 @@
-import { sendGmail } from "@/lib/mail/gmail";
-import { fromIdentity, mailMode, type OutboundMail } from "@/lib/mail/message";
 import { readEnv } from "@/lib/env";
+import { connectedRefreshToken, markGmailDisconnected } from "@/lib/google/tokens";
+import { GmailAuthError, sendGmail, sendGmailMessage } from "@/lib/mail/gmail";
+import { applyTestRedirect, fromIdentity, mailMode, mailTestMode, textToHtml, type OutboundMail } from "@/lib/mail/message";
+import type { SqlDb } from "@/lib/sql/types";
 
-export async function deliverMail(input: { to: string; subject: string; text: string }, fetchImpl: typeof fetch = fetch): Promise<string> {
-  const from = await fromIdentity();
-  const message: OutboundMail = { ...input, fromAddress: from.address, fromName: from.name };
+export type DeliverInput = {
+  to: string;
+  subject: string;
+  text: string;
+  html?: string;
+  senderUserId?: number | null;
+  db?: SqlDb;
+};
+
+async function userToken(db: SqlDb | undefined, userId: number | null | undefined) {
+  if (!db || !userId) return null;
+  const connected = await connectedRefreshToken(db, userId);
+  if (!connected) return null;
+  const clientId = (await readEnv("GOOGLE_CLIENT_ID")).trim();
+  const clientSecret = (await readEnv("GOOGLE_CLIENT_SECRET")).trim();
+  if (!clientId || !clientSecret) throw new Error("Falta la configuración de Google para enviar.");
+  return { ...connected, clientId, clientSecret };
+}
+
+/**
+ * Sends with the sender's connected Gmail when one exists. Otherwise uses MAIL_MODE.
+ * Test mode (the default) rewrites the recipient to the sender so customers are not mailed.
+ */
+export async function deliverMail(input: DeliverInput, fetchImpl: typeof fetch = fetch): Promise<string> {
+  const shared = await fromIdentity();
+  const message: OutboundMail = {
+    to: input.to,
+    subject: input.subject,
+    text: input.text,
+    html: input.html,
+    fromAddress: shared.address,
+    fromName: shared.name,
+  };
   const mode = await mailMode();
   if (mode === "log") {
     console.info(`[mail:log] From: ${message.fromName} <${message.fromAddress}> To: ${message.to} Subject: ${message.subject}\n${message.text}`);
     return "log";
   }
-  if (mode === "gmail_api") return sendGmail(message, fetchImpl);
-  if (mode === "smtp") return sendSmtp(message);
+
+  const connected = await userToken(input.db, input.senderUserId);
+  if (connected) {
+    const outgoing = await prepare({ ...message, fromAddress: connected.googleEmail }, connected.googleEmail);
+    try {
+      return await sendGmailMessage(
+        outgoing,
+        { client_id: connected.clientId, client_secret: connected.clientSecret, refresh_token: connected.refreshToken },
+        fetchImpl,
+      );
+    } catch (error) {
+      if (!(error instanceof GmailAuthError) || error.code !== "invalid_grant" || !input.db || !input.senderUserId) throw error;
+      await markGmailDisconnected(input.db, input.senderUserId);
+    }
+  }
+  const outgoing = await prepare(message, shared.address);
+  if (mode === "gmail_api") return sendGmail(outgoing, fetchImpl);
+  if (mode === "smtp") return sendSmtp(outgoing);
   throw new Error(`MAIL_MODE desconocido: ${mode}`);
+}
+
+async function prepare(message: OutboundMail, safeTo: string): Promise<OutboundMail> {
+  const redirected = (await mailTestMode()) ? applyTestRedirect(message, safeTo) : message;
+  return redirected.html ? redirected : { ...redirected, html: textToHtml(redirected.text) };
 }
 
 /**

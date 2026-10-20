@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { jsonError, requireSession } from "@/lib/auth/guard";
 import { hydrateProcessEnv } from "@/lib/env";
-import { fromIdentity, mailMode } from "@/lib/mail/message";
+import { fromIdentity, mailMode, mailTestMode } from "@/lib/mail/message";
 import { enqueueEmail, listOutbox } from "@/lib/mail/outbox";
 import { getSql } from "@/lib/sql";
 
@@ -12,9 +12,10 @@ export async function GET(request: Request) {
     await hydrateProcessEnv();
     const db = await getSql();
     await requireSession(request, db);
-    const [messages, from, mode] = await Promise.all([listOutbox(db), fromIdentity(), mailMode()]);
+    const [messages, from, mode, testMode] = await Promise.all([listOutbox(db), fromIdentity(), mailMode(), mailTestMode()]);
     return NextResponse.json({
       mode,
+      testMode,
       from,
       messages: messages.map((row) => ({
         id: row.id,
@@ -37,7 +38,7 @@ export async function POST(request: Request) {
   try {
     await hydrateProcessEnv();
     const db = await getSql();
-    await requireSession(request, db);
+    const session = await requireSession(request, db);
     const body = (await request.json()) as { to?: string; subject?: string; body?: string; dedupeKey?: string | null; resend?: boolean };
     const queued = await enqueueEmail(db, {
       to: body.to ?? "",
@@ -45,6 +46,7 @@ export async function POST(request: Request) {
       body: body.body ?? "",
       dedupeKey: body.dedupeKey,
       resend: body.resend === true,
+      senderUserId: session.uid,
     });
     const from = await fromIdentity();
     return NextResponse.json({ ...queued, from, mode: await mailMode() });

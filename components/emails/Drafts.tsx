@@ -23,12 +23,14 @@ export function Drafts({
   initialLead,
   missingLeadKey,
   fromLabel,
+  testMode = false,
 }: {
   templates: EmailTemplate[];
   initialTemplateId: string | null;
   initialLead: LeadSummary | null;
   missingLeadKey: string | null;
   fromLabel: string;
+  testMode?: boolean;
 }) {
   const { toast } = useToast();
   const [templateId, setTemplateId] = useState(initialTemplateId ?? templates[0]?.id ?? "");
@@ -165,6 +167,7 @@ export function Drafts({
             fields={fields}
             usedKeys={usedKeys}
             fromLabel={fromLabel}
+            testMode={testMode}
             recipient={recipient}
             resend={resend}
             enqueuePending={enqueuePending}

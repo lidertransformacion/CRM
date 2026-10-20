@@ -21,7 +21,15 @@ export function isStaticAsset(pathname: string): boolean {
 }
 
 export function allowsDuringPasswordChange(pathname: string): boolean {
-  return pathname === "/cuenta" || pathname === "/api/auth/password" || pathname === "/api/auth/logout" || pathname === "/login";
+  return (
+    pathname === "/cuenta" ||
+    pathname === "/api/auth/password" ||
+    pathname === "/api/auth/logout" ||
+    pathname === "/login" ||
+    pathname === "/api/auth/google" ||
+    pathname === "/api/auth/google/callback" ||
+    pathname === "/api/auth/google/disconnect"
+  );
 }
 
 export async function agentAuthorized(request: Request): Promise<boolean> {
