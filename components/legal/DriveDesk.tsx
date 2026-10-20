@@ -12,6 +12,7 @@ import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { useToast } from "@/components/ui/toast";
 import { formatBytes } from "@/components/legal/labels";
+import { StorageBar } from "@/components/storage/StorageBar";
 import { cn } from "@/lib/utils";
 
 type FolderItem = { id: number; parent_id: number | null; name: string };
@@ -20,7 +21,7 @@ type Crumb = { id: number | null; name: string };
 
 type Listing = { folders: FolderItem[]; files: FileItem[]; breadcrumbs: Crumb[]; canManage: boolean };
 
-export function DriveDesk({ canManage }: { canManage: boolean }) {
+export function DriveDesk({ canManage, initialUsage }: { canManage: boolean; initialUsage?: { bytesUsed: number; limitBytes: number } }) {
   const { toast } = useToast();
   const [folderId, setFolderId] = useState<number | null>(null);
   const [query, setQuery] = useState("");
@@ -30,6 +31,7 @@ export function DriveDesk({ canManage }: { canManage: boolean }) {
   const [error, setError] = useState("");
   const [previewId, setPreviewId] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
+  const [usage, setUsage] = useState(initialUsage ?? null);
   const [dialog, setDialog] = useState<
     | { kind: "folder" }
     | { kind: "rename-folder" | "rename-file"; id: number; name: string }
@@ -40,6 +42,13 @@ export function DriveDesk({ canManage }: { canManage: boolean }) {
   const [draftName, setDraftName] = useState("");
   const [moveTarget, setMoveTarget] = useState<string>("");
   const [tree, setTree] = useState<FolderItem[]>([]);
+
+  const refreshUsage = useCallback(async () => {
+    const response = await fetch("/api/storage");
+    if (!response.ok) return;
+    const body = (await response.json()) as { bytesUsed: number; limitBytes: number };
+    setUsage({ bytesUsed: body.bytesUsed, limitBytes: body.limitBytes });
+  }, []);
 
   const load = useCallback(async (nextFolder: number | null, q: string) => {
     setError("");
@@ -95,7 +104,7 @@ export function DriveDesk({ canManage }: { canManage: boolean }) {
         }
       }
       toast({ title: pdfs.length === 1 ? "PDF subido" : "PDFs subidos", tone: "ok" });
-      await load(folderId, activeQuery);
+      await Promise.all([load(folderId, activeQuery), refreshUsage()]);
     } finally {
       setBusy(false);
     }
@@ -149,7 +158,7 @@ export function DriveDesk({ canManage }: { canManage: boolean }) {
       }
       setDialog(null);
       if ((dialog.kind === "delete-folder" || dialog.kind === "delete-file") && previewId === dialog.id) setPreviewId(null);
-      await load(folderId, activeQuery);
+      await Promise.all([load(folderId, activeQuery), dialog.kind === "delete-file" ? refreshUsage() : Promise.resolve()]);
     } finally {
       setBusy(false);
     }
@@ -160,6 +169,11 @@ export function DriveDesk({ canManage }: { canManage: boolean }) {
 
   return (
     <div className="space-y-4" onDragOver={(event) => event.preventDefault()} onDrop={onDrop}>
+      {usage && (
+        <div className="rounded-lg border border-line-2 bg-surface px-4 py-3">
+          <StorageBar bytesUsed={usage.bytesUsed} limitBytes={usage.limitBytes} />
+        </div>
+      )}
       <div className="flex flex-wrap items-center gap-2">
         <form
           className="flex min-w-0 flex-1 items-center gap-2"

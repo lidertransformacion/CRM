@@ -8,6 +8,11 @@ export type LegalBucket = {
   ): Promise<unknown>;
   get(key: string): Promise<LegalObject | null>;
   delete(key: string): Promise<void>;
+  list?(options?: { cursor?: string; limit?: number; prefix?: string }): Promise<{
+    objects: { key: string; size: number }[];
+    truncated?: boolean;
+    cursor?: string;
+  }>;
 };
 
 export type LegalObject = {

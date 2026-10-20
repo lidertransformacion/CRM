@@ -3,6 +3,7 @@ import { HttpError } from "@/lib/auth/users";
 import type { Actor } from "@/lib/legal/access";
 import { recordAudit } from "@/lib/legal/audit";
 import { legalFilesBucket, MAX_PDF_BYTES, sha256Hex, type LegalBucket, type LegalObject } from "@/lib/legal/storage";
+import { releaseBytes, reserveBytes } from "@/lib/storage/quota";
 import type { SqlDb } from "@/lib/sql/types";
 
 export type FolderRow = {
@@ -274,14 +275,32 @@ export async function storePdf(db: SqlDb, actor: Actor, input: StoredPdf, bucket
   if (input.folderId != null) await liveFolder(db, input.folderId);
   const sha = await sha256Hex(input.bytes);
   const key = `files/${crypto.randomUUID()}`;
-  await target.put(key, input.bytes, { httpMetadata: { contentType: "application/pdf" } });
+  const size = input.bytes.byteLength;
+  await reserveBytes(db, size);
+  try {
+    await target.put(key, input.bytes, { httpMetadata: { contentType: "application/pdf" } });
+  } catch (error) {
+    await releaseBytes(db, size);
+    throw error;
+  }
   const now = new Date().toISOString();
   const kind = input.kind ?? "upload";
-  const result = await db.run(
+  let result;
+  try {
+    result = await db.run(
     `INSERT INTO files (folder_id, name, r2_key, mime, size_bytes, sha256, kind, created_by, created_at, updated_at)
      VALUES (?, ?, ?, 'application/pdf', ?, ?, ?, ?, ?, ?)`,
-    [input.folderId ?? null, name, key, input.bytes.byteLength, sha, kind, actor.uid, now, now],
+    [input.folderId ?? null, name, key, size, sha, kind, actor.uid, now, now],
   );
+  } catch (error) {
+    try {
+      await target.delete(key);
+    } catch {
+      // The counter is released below even if the object is already gone.
+    }
+    await releaseBytes(db, size);
+    throw error;
+  }
   await recordAudit(db, {
     entityType: "file",
     entityId: result.lastInsertRowid,
@@ -348,8 +367,19 @@ export async function deleteFile(db: SqlDb, actor: Actor, id: number): Promise<v
   if ((file.kind === "contract_signed" || signed) && actor.role !== "admin") {
     throw new HttpError(403, "Un PDF firmado no se elimina.");
   }
+  const retainBytes = file.kind === "contract_signed" || !!signed;
   const now = new Date().toISOString();
   await db.run("UPDATE files SET deleted_at = ?, updated_at = ? WHERE id = ?", [now, now, id]);
+  if (!retainBytes) {
+    try {
+      const bucket = await bucketOrThrow();
+      await bucket.delete(file.r2_key);
+      await releaseBytes(db, file.size_bytes);
+    } catch (error) {
+      await db.run("UPDATE files SET deleted_at = NULL, updated_at = ? WHERE id = ?", [now, id]);
+      throw error;
+    }
+  }
   await recordAudit(db, {
     entityType: "file",
     entityId: id,
@@ -358,6 +388,6 @@ export async function deleteFile(db: SqlDb, actor: Actor, id: number): Promise<v
     actorEmail: actor.email,
     ip: actor.ip,
     userAgent: actor.userAgent,
-    data: { r2_key: file.r2_key, kept: true },
+    data: { r2_key: file.r2_key, kept: retainBytes },
   });
 }

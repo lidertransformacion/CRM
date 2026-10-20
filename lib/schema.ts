@@ -481,6 +481,11 @@ CREATE TABLE IF NOT EXISTS notifications (
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS notifications_user ON notifications(user_id, read_at);
+CREATE TABLE IF NOT EXISTS storage_usage (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  bytes_used INTEGER NOT NULL DEFAULT 0,
+  updated_at TEXT NOT NULL
+);
 `;
 
 /** Bump when SCHEMA gains indexes or columns so an existing D1 applies them once. */
