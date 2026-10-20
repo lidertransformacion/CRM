@@ -56,7 +56,7 @@ export function AppShell({ children, user = null }: { children: React.ReactNode;
       </React.Suspense>
       <div className="min-h-dvh">
         <aside
-          className="fixed inset-y-0 left-0 z-30 hidden w-[var(--sidebar-w)] flex-col border-r border-line-2 bg-surface text-ink lg:flex"
+          className="fixed inset-y-0 left-0 z-30 hidden w-[var(--sidebar-w)] flex-col border-r border-line-2 bg-surface text-ink print:hidden lg:flex"
           aria-label="Navegación principal"
         >
           <Brand />
@@ -64,8 +64,8 @@ export function AppShell({ children, user = null }: { children: React.ReactNode;
           <SidebarFooter user={user} />
         </aside>
 
-        <div className="lg:pl-[var(--sidebar-w)]">
-          <header className="sticky top-0 z-20 flex h-14 items-center gap-3 border-b border-line-2 bg-bg/85 px-4 backdrop-blur lg:px-7">
+        <div className="print:pl-0 lg:pl-[var(--sidebar-w)]">
+          <header className="sticky top-0 z-20 flex h-14 items-center gap-3 border-b border-line-2 bg-bg/85 px-4 backdrop-blur print:hidden lg:px-7">
             <Link href="/" className="flex items-center gap-2 lg:hidden">
               <LogoMark className="size-6 text-navy" />
               <span className="font-sans text-sm font-semibold">
@@ -151,7 +151,7 @@ function SidebarNav({ pathname, user }: { pathname: string; user: ShellUser }) {
       ))}
       {/* Siempre visible: la página de Ajustes ya bloquea a quien no sea administrador. */}
       <div className="mt-3.5 border-t border-line-2 pt-2">
-        <NavRow href="/ajustes" icon={Settings} label="Ajustes" description={user?.role === "user" ? "Solo administradores" : "Crear usuarios y contraseñas"} active={settingsActive} />
+        <NavRow href="/ajustes" icon={Settings} label="Ajustes" description={user?.role === "user" ? "Solo administradores" : "Usuarios y contraseñas"} active={settingsActive} />
       </div>
     </nav>
   );

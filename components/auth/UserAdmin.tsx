@@ -1,10 +1,11 @@
 "use client";
 
 import { useState, type FormEvent, type ReactNode } from "react";
-import { CircleAlert, CircleCheck, KeyRound, UserPlus } from "lucide-react";
+import { CircleAlert, CircleCheck, KeyRound, UserMinus, UserPlus } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardBody, CardFooter, CardHeader } from "@/components/ui/card";
+import { Dialog, DialogContent, DialogFooter } from "@/components/ui/dialog";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Field, FieldGrid } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
@@ -34,6 +35,10 @@ export function UserAdmin({ initial, currentEmail }: { initial: User[]; currentE
   const [resetError, setResetError] = useState("");
   const [resetMessage, setResetMessage] = useState("");
   const [resetPending, setResetPending] = useState(false);
+  const [pendingDelete, setPendingDelete] = useState<User | null>(null);
+  const [deleteError, setDeleteError] = useState("");
+  const [deletePending, setDeletePending] = useState(false);
+  const adminCount = users.filter((user) => user.role === "admin").length;
 
   async function onSubmit(event: FormEvent) {
     event.preventDefault();
@@ -88,6 +93,35 @@ export function UserAdmin({ initial, currentEmail }: { initial: User[]; currentE
       setResetError("Sin conexión. Inténtalo de nuevo.");
     } finally {
       setResetPending(false);
+    }
+  }
+
+  function removalBlock(user: User): string {
+    if (user.email === currentEmail) return "No puedes quitarte a ti mismo.";
+    if (user.role === "admin" && adminCount <= 1) return "Es el último administrador.";
+    return "";
+  }
+
+  async function confirmRemoval() {
+    if (!pendingDelete) return;
+    setDeletePending(true);
+    setDeleteError("");
+    try {
+      const response = await fetch(`/api/users/${pendingDelete.id}`, { method: "DELETE" });
+      const body = (await response.json()) as { error?: string };
+      if (!response.ok) {
+        setDeleteError(body.error || "No se pudo quitar a la persona.");
+        return;
+      }
+      const removedId = pendingDelete.id;
+      const removedEmail = pendingDelete.email;
+      setUsers((rows) => rows.filter((user) => user.id !== removedId));
+      toast({ title: "Persona quitada del equipo", description: `${removedEmail} ya no puede entrar y su sesión quedó cerrada.`, tone: "ok" });
+      setPendingDelete(null);
+    } catch {
+      setDeleteError("Sin conexión. Inténtalo de nuevo.");
+    } finally {
+      setDeletePending(false);
     }
   }
 
@@ -193,6 +227,7 @@ export function UserAdmin({ initial, currentEmail }: { initial: User[]; currentE
                   <div className="mt-1.5 flex flex-wrap items-center gap-2 text-xs text-ink-3">
                     <span>{ROLE_LABEL[user.role]}</span>
                     <StatusBadge user={user} />
+                    <RemoveButton user={user} reason={removalBlock(user)} onRemove={() => { setDeleteError(""); setPendingDelete(user); }} />
                   </div>
                 </li>
               ))}
@@ -205,6 +240,7 @@ export function UserAdmin({ initial, currentEmail }: { initial: User[]; currentE
                     <TH>Correo</TH>
                     <TH>Rol</TH>
                     <TH>Estado</TH>
+                    <TH className="text-right">Equipo</TH>
                   </tr>
                 </THead>
                 <TBody>
@@ -218,6 +254,9 @@ export function UserAdmin({ initial, currentEmail }: { initial: User[]; currentE
                       <TD>
                         <StatusBadge user={user} />
                       </TD>
+                      <TD className="text-right">
+                        <RemoveButton user={user} reason={removalBlock(user)} onRemove={() => { setDeleteError(""); setPendingDelete(user); }} />
+                      </TD>
                     </TR>
                   ))}
                 </TBody>
@@ -226,7 +265,36 @@ export function UserAdmin({ initial, currentEmail }: { initial: User[]; currentE
           </>
         )}
       </Card>
+      <Dialog open={pendingDelete != null} onOpenChange={(open) => { if (!open && !deletePending) setPendingDelete(null); }}>
+        <DialogContent title="Quitar del equipo" description="La persona deja de poder entrar. Su sesión se cierra y se borra su conexión de Gmail.">
+          <div className="space-y-3 px-5 py-4 text-sm text-ink-2">
+            <p>
+              Vas a desactivar <span className="font-medium text-ink">{pendingDelete?.email}</span>. Las oportunidades y actividades que ya tiene siguen en el CRM.
+            </p>
+            {deleteError && <Alert tone="danger">{deleteError}</Alert>}
+          </div>
+          <DialogFooter>
+            <Button type="button" variant="secondary" disabled={deletePending} onClick={() => setPendingDelete(null)}>
+              Cancelar
+            </Button>
+            <Button type="button" variant="danger" loading={deletePending} disabled={deletePending} onClick={confirmRemoval}>
+              <UserMinus />
+              Quitar del equipo
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
+  );
+}
+
+function RemoveButton({ user, reason, onRemove }: { user: User; reason: string; onRemove: () => void }) {
+  if (reason) return <span className="text-xs text-ink-3">{reason}</span>;
+  return (
+    <Button type="button" variant="danger-soft" size="sm" onClick={onRemove} aria-label={`Quitar a ${user.email}`}>
+      <UserMinus />
+      Quitar
+    </Button>
   );
 }
 

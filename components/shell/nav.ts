@@ -1,5 +1,5 @@
 import type { LucideIcon } from "lucide-react";
-import { ChartBar, ClipboardList, Coffee, LayoutDashboard, Mail, SquareKanban, Users } from "lucide-react";
+import { ChartBar, ClipboardList, Coffee, LayoutDashboard, Mail, MapPinned, SquareKanban, Users } from "lucide-react";
 
 export type NavItem = { href: string; label: string; description: string; icon: LucideIcon; exact?: boolean };
 
@@ -11,6 +11,7 @@ export const NAV: NavItem[] = [
   { href: "/kpis", label: "KPIs", description: "Resultados por vendedor y metas", icon: ChartBar },
   { href: "/comodatos", label: "Equipos", description: "Comodatos, garantías y mantenimiento", icon: Coffee },
   { href: "/clientes", label: "Clientes", description: "Historia completa de cada cliente", icon: Users },
+  { href: "/visitas", label: "Visitas", description: "Reportes de visita y cobertura semanal", icon: MapPinned },
   { href: "/correos", label: "Correos", description: "Borradores listos para copiar", icon: Mail },
 ];
 

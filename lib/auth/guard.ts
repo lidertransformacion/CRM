@@ -64,7 +64,7 @@ export async function requireSession(request: Request, db: SqlDb): Promise<Sessi
   const session = await readSessionFromRequest(request);
   if (!session) throw new HttpError(401, "unauthorized");
   const user = await userById(db, session.uid);
-  if (!user || user.session_version !== session.sv) throw new HttpError(401, "unauthorized");
+  if (!user || user.active === 0 || user.deleted_at || user.session_version !== session.sv) throw new HttpError(401, "unauthorized");
   const url = new URL(request.url);
   if (user.must_change_password && !allowsDuringPasswordChange(url.pathname)) {
     throw new HttpError(403, "password_change_required");

@@ -12,6 +12,8 @@ export type UserRow = {
   must_change_password: number;
   email_opt_out: number;
   session_version: number;
+  active: number;
+  deleted_at: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -65,6 +67,7 @@ export async function authenticate(db: SqlDb, email: string, password: string): 
   if (!user || !(await verifyPassword(normalizePassword(password), user.password_hash))) {
     throw new HttpError(401, "Correo o contraseña incorrectos.");
   }
+  if (user.active === 0 || user.deleted_at) throw new HttpError(401, "Esta cuenta ya no tiene acceso.");
   return user;
 }
 
@@ -91,7 +94,11 @@ export async function createUser(
     return { id: result.lastInsertRowid, email, role };
   } catch (error) {
     const message = error instanceof Error ? error.message : "";
-    if (/unique/i.test(message)) throw new HttpError(409, "Ese correo ya tiene usuario.");
+    if (/unique/i.test(message)) {
+      const existing = await db.get<{ active: number }>("SELECT active FROM users WHERE email = ?", [email]);
+      if (existing && existing.active === 0) throw new HttpError(409, "Ese correo está desactivado.");
+      throw new HttpError(409, "Ese correo ya tiene usuario.");
+    }
     throw error;
   }
 }
@@ -144,9 +151,54 @@ export async function setEmailOptOut(db: SqlDb, userId: number, optOut: boolean)
 
 export async function listUsers(db: SqlDb): Promise<Omit<UserRow, "password_hash">[]> {
   return db.all(
-    `SELECT id, email, role, must_change_password, email_opt_out, session_version, created_at, updated_at
-     FROM users ORDER BY email`,
+    `SELECT id, email, role, must_change_password, email_opt_out, session_version, active, deleted_at, created_at, updated_at
+     FROM users
+     WHERE COALESCE(active, 1) = 1 AND deleted_at IS NULL
+     ORDER BY email`,
   );
+}
+
+/**
+ * Soft-deletes a CRM user. Sessions stop because session_version changes, and any
+ * Gmail refresh token for that user is removed. The row stays so owned leads keep their author.
+ */
+export async function deactivateUser(
+  db: SqlDb,
+  actor: { id: number; role: Role },
+  userId: number,
+): Promise<{ id: number; email: string }> {
+  if (actor.role !== "admin") throw new HttpError(403, "Solo un administrador puede quitar personas del equipo.");
+  if (!Number.isInteger(userId) || userId <= 0) throw new HttpError(400, "Usuario inválido.");
+  const target = await db.get<UserRow>("SELECT * FROM users WHERE id = ?", [userId]);
+  if (!target || target.active === 0 || target.deleted_at) throw new HttpError(404, "Ese usuario no está en el equipo.");
+  if (target.role === "admin") {
+    const admins = await db.get<{ n: number }>(
+      "SELECT COUNT(*) AS n FROM users WHERE role = 'admin' AND COALESCE(active, 1) = 1 AND deleted_at IS NULL",
+    );
+    if (Number(admins?.n ?? 0) <= 1) throw new HttpError(400, "No puedes quitar al último administrador.");
+  }
+  if (actor.id === userId) throw new HttpError(400, "No puedes quitarte a ti mismo.");
+  const now = new Date().toISOString();
+  await db.run(
+    `UPDATE users
+     SET active = 0, deleted_at = ?, session_version = session_version + 1, updated_at = ?
+     WHERE id = ?`,
+    [now, now, userId],
+  );
+  try {
+    await db.run("DELETE FROM gmail_tokens WHERE user_id = ?", [userId]);
+  } catch {
+    // The Gmail table is absent until that migration has been applied.
+  }
+  try {
+    await db.run(
+      `INSERT INTO user_events (at, actor_user_id, action, target_user_id, detail) VALUES (?, ?, 'deactivate', ?, ?)`,
+      [now, actor.id, userId, target.email],
+    );
+  } catch {
+    // Audit is best-effort when an older database has not created user_events yet.
+  }
+  return { id: target.id, email: target.email };
 }
 
 export async function userById(db: SqlDb, id: number): Promise<UserRow | undefined> {
