@@ -5,6 +5,9 @@ import { notFound } from "next/navigation";
 import QRCode from "qrcode";
 import { ArrowLeft, ClipboardList, Pencil, Wrench } from "lucide-react";
 import { costFor, equipmentHistory, getEquipment, hourlyRate, maintenanceLogs } from "@/lib/db";
+import { can } from "@/lib/auth/permissions";
+import { requirePageUser } from "@/lib/auth/page-session";
+import { LinkedContracts } from "@/components/legal/LinkedContracts";
 import { siteById, statusLabel } from "@/lib/equipment/catalog";
 import { nextMaintenanceFor } from "@/lib/equipment/queries";
 import type { WarrantyState } from "@/lib/equipment/warranty";
@@ -31,6 +34,7 @@ export default async function LifeSheet({ params }: { params: Promise<{ serial: 
   const decoded = decodeURIComponent(serial);
   const equipment = await getEquipment(decoded);
   if (!equipment) notFound();
+  const session = await requirePageUser(`/comodatos/${encodeURIComponent(decoded)}`);
 
   const today = todayIso();
   const [history, logs, rate, next] = await Promise.all([
@@ -123,6 +127,10 @@ export default async function LifeSheet({ params }: { params: Promise<{ serial: 
             <p className="mt-1 break-all text-xs text-ink-3">{url}</p>
           </CardBody>
         </Card>
+      </div>
+
+      <div className="mt-4">
+        <LinkedContracts targetType="equipment" targetKey={equipment.serial} canUpload={can(session.role, "upload_contract")} />
       </div>
 
       <Card className="mt-4">

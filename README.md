@@ -40,8 +40,9 @@ Open [http://127.0.0.1:4317](http://127.0.0.1:4317). The first request creates `
 
 Every page and API route requires a signed `crm_session` cookie. Public routes are only `/login` and `POST /api/auth/login`.
 
-- Roles are `admin` and `user`.
-- Only an admin can create users, and only for emails that end exactly in `@libertariocoffee.com` (one `@`, no subdomain, case-insensitive).
+- Each user has one role: `admin`, `comercial`, `legal`, or `gerencia`. The previous role `user` is read and stored as `comercial`.
+- Only an admin can create users and chooses that role. Emails must end exactly in `@libertariocoffee.com` (one `@`, no subdomain, case-insensitive).
+- Everyone can read contracts. Legal and admin manage the in-CRM file folders. Comercial uploads PDFs for their own deals and equipment. Gerencia has a placeholder dashboard at `/gerencia`. Signing is not built yet; each contract stores an ordered signer list that can include the external client.
 - The first admin is always `lidertransformacion@libertariocoffee.com`. It is inserted on boot when `BOOTSTRAP_ADMIN_PASSWORD` is set, with `must_change_password`. There is no password in the repo.
 - Changing `BOOTSTRAP_ADMIN_PASSWORD` after that user exists does not rotate the password.
 - An admin can set a temporary password from Ajustes, or `POST /api/users/reset` with `{ "email", "password" }`. The account must change it on `/cuenta`, and its previous sessions stop working.
@@ -52,7 +53,13 @@ Every page and API route requires a signed `crm_session` cookie. Public routes a
 
 Production deploys from `main` through Cloudflare Workers Builds. The dashboard Git integration creates its own API token. This repository has no GitHub Actions workflow and no Cloudflare token. The exact dashboard fields are in [docs/deploy-cloudflare.md](docs/deploy-cloudflare.md).
 
-The Worker name is `crm-libertario`. The D1 binding `DB` is the existing database `crm-pay-line` (`ded1c012-2e0a-4b1b-9339-24047b32a99e`). `MAIL_MODE` is `gmail_api` and `SHEETS_SYNC_ENABLED` is `false`. Secrets stay out of `wrangler.jsonc`.
+The Worker name is `crm-libertario`. The D1 binding `DB` is the existing database `crm-pay-line` (`ded1c012-2e0a-4b1b-9339-24047b32a99e`). Contract PDFs use the R2 binding `LEGAL_FILES` (bucket `crm-legal-files`). Create that bucket before the next production deploy; this repository does not create it:
+
+```bash
+npx wrangler r2 bucket create crm-legal-files
+```
+
+`MAIL_MODE` is `gmail_api` and `SHEETS_SYNC_ENABLED` is `false`. Secrets stay out of `wrangler.jsonc`. There is no new secret for contracts. `MAIL_TEST_MODE` is unchanged.
 
 Set a secret from a trusted machine. Wrangler prompts for the value.
 

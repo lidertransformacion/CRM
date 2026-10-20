@@ -1,7 +1,9 @@
 import { readEnv } from "@/lib/env";
 import { safeEqual } from "@/lib/auth/password";
+import { normalizeRole, type Role } from "@/lib/auth/roles";
 
-export type Role = "admin" | "user";
+export type { Role };
+export { normalizeRole };
 
 export type SessionPayload = {
   uid: number;
@@ -64,11 +66,12 @@ export async function verifySession(token: string | undefined | null): Promise<S
   const expected = await hmac(secret, body);
   if (!safeEqual(expected, signature)) return null;
   try {
-    const payload = JSON.parse(b64urlToString(body)) as SessionPayload;
+    const payload = JSON.parse(b64urlToString(body)) as SessionPayload & { role: string };
     if (!payload.exp || payload.exp < Math.floor(Date.now() / 1000)) return null;
-    if (payload.role !== "admin" && payload.role !== "user") return null;
-    if (!payload.uid || !payload.email) return null;
-    return payload;
+    if (!payload.uid || !payload.email || typeof payload.role !== "string") return null;
+    const stored = payload.role;
+    if (stored !== "admin" && stored !== "comercial" && stored !== "legal" && stored !== "gerencia" && stored !== "user") return null;
+    return { ...payload, role: normalizeRole(stored) };
   } catch {
     return null;
   }

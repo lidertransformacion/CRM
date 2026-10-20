@@ -115,7 +115,7 @@ describe("bootstrap admin", () => {
     created.push(file);
     process.env.BOOTSTRAP_ADMIN_PASSWORD = "correct-horse-battery";
     await ensureBootstrapAdmin(db);
-    await expect(resetUserPassword(db, { role: "user" }, { email: BOOTSTRAP_ADMIN_EMAIL, password: "temporary-password" })).rejects.toMatchObject({
+    await expect(resetUserPassword(db, { role: "comercial" }, { email: BOOTSTRAP_ADMIN_EMAIL, password: "temporary-password" })).rejects.toMatchObject({
       status: 403,
     });
     const reset = await resetUserPassword(db, { role: "admin" }, { email: BOOTSTRAP_ADMIN_EMAIL, password: "  temporary-password  " });
@@ -151,13 +151,15 @@ describe("bootstrap admin", () => {
     const { file, db } = await tempSql();
     created.push(file);
     const admin = { role: "admin" as const };
-    const user = { role: "user" as const };
+    const user = { role: "comercial" as const };
     await expect(createUser(db, user, { email: "nueva@libertariocoffee.com", password: "correct-horse-battery" })).rejects.toBeInstanceOf(HttpError);
     await expect(createUser(db, user, { email: "nueva@libertariocoffee.com", password: "correct-horse-battery" })).rejects.toMatchObject({ status: 403 });
     await expect(createUser(db, admin, { email: "nueva@gmail.com", password: "correct-horse-battery" })).rejects.toMatchObject({ status: 400 });
     await expect(createUser(db, admin, { email: "Nueva@LibertarioCoffee.com", password: "short" })).rejects.toMatchObject({ status: 400 });
     const createdUser = await createUser(db, admin, { email: "Nueva@LibertarioCoffee.com", password: "correct-horse-battery" });
-    expect(createdUser).toMatchObject({ email: "nueva@libertariocoffee.com", role: "user" });
+    expect(createdUser).toMatchObject({ email: "nueva@libertariocoffee.com", role: "comercial" });
+    const legal = await createUser(db, admin, { email: "legal@libertariocoffee.com", password: "correct-horse-battery", role: "legal" });
+    expect(legal.role).toBe("legal");
     const row = await db.get<{ must_change_password: number }>("SELECT must_change_password FROM users WHERE email = ?", ["nueva@libertariocoffee.com"]);
     expect(row?.must_change_password).toBe(1);
     await expect(createUser(db, admin, { email: "nueva@libertariocoffee.com", password: "correct-horse-battery" })).rejects.toMatchObject({ status: 409 });
