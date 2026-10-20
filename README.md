@@ -45,6 +45,7 @@ Every page and API route requires a signed `crm_session` cookie. Public routes a
 - The first admin is always `lidertransformacion@libertariocoffee.com`. It is inserted on boot when `BOOTSTRAP_ADMIN_PASSWORD` is set, with `must_change_password`. There is no password in the repo.
 - Changing `BOOTSTRAP_ADMIN_PASSWORD` after that user exists does not rotate the password.
 - An admin can set a temporary password from Ajustes, or `POST /api/users/reset` with `{ "email", "password" }`. The account must change it on `/cuenta`, and its previous sessions stop working.
+- An admin can remove someone from the team in Ajustes. `DELETE /api/users/:id` deactivates that user, ends their sessions, and deletes their `gmail_tokens` row. It refuses the signed-in admin and the last active admin.
 - Until that password is changed, other pages redirect to `/cuenta` and other APIs return 403.
 - Each request reads secrets from the Workers env binding. A value left on `process.env` does not hide a newer binding. Setup runs one seed batch and the bootstrap check on every request, not once per isolate.
 
@@ -104,7 +105,8 @@ Binding: D1 database `crm-pay-line` as `DB`.
 - **Comodatos** — 224 machines. **Ver diff** plans against the bundled CSV while sync is off. **Traer de la hoja** and **Enviar cambios** write only when `SHEETS_SYNC_ENABLED=true`. The sheet is the source on pull. Rows are matched by serial and never deleted.
 - **Clientes** — Timeline of opportunities, activities, committee items, and comodatos.
 - **Correos** — Spanish drafts you can copy or queue. **Procesar bandeja** follows `MAIL_MODE`. A user with Gmail connected on **Cuenta** sends as that account. Otherwise production `gmail_api` uses the shared mailbox. Test mode (the default) does not deliver to the customer. `log` leaves the message queued.
-- **Ajustes** — Admins create users.
+- **Visitas** — Hospitality visit reports, weekly coverage, PDF, and `LIBV1.` import. See [docs/visits.md](docs/visits.md).
+- **Ajustes** — Admins create users and can remove someone from the team.
 - **Cuenta** — Password change and **Conectar Gmail**.
 
 Rules and the sheet adapter are in [docs/process.md](docs/process.md).
