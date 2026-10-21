@@ -21,7 +21,7 @@ export default async function DrivePage() {
       <PageHeader
         eyebrow="Legal"
         title="Archivos"
-        description={manage ? "Carpetas, PDF y vista previa. El archivo vive en el CRM, no en Google Drive." : "Puedes consultar y descargar. Legal y administración crean carpetas y suben archivos sueltos."}
+        description={manage ? "Carpetas, PDF y vista previa. El archivo vive en el CRM, no en Google Drive." : "Puedes consultar y descargar. Quien administra archivos crea carpetas y sube PDF."}
         actions={<Link href="/legal" className={cn(buttonVariants({ variant: "secondary" }))}>Contratos</Link>}
       />
       <DriveDesk canManage={manage} initialUsage={{ bytesUsed: usage.bytesUsed, limitBytes: usage.limitBytes }} />

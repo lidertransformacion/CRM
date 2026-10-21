@@ -17,7 +17,7 @@ type Results = {
 const EMPTY: Results = { leads: [], equipment: [], clients: [] };
 
 /** Buscador global (⌘K): navega a secciones y encuentra clientes, equipos y oportunidades. */
-export function CommandPalette({ open, onOpenChange, sections: sectionItems = NAV }: { open: boolean; onOpenChange: (open: boolean) => void; sections?: NavItem[] }) {
+export function CommandPalette({ open, onOpenChange, sections: sectionItems = NAV, lookup = true }: { open: boolean; onOpenChange: (open: boolean) => void; sections?: NavItem[]; lookup?: boolean }) {
   const router = useRouter();
   const [query, setQuery] = React.useState("");
   const [results, setResults] = React.useState<Results>(EMPTY);
@@ -32,7 +32,7 @@ export function CommandPalette({ open, onOpenChange, sections: sectionItems = NA
 
   React.useEffect(() => {
     const q = query.trim();
-    if (q.length < 2) {
+    if (!lookup || q.length < 2) {
       setResults(EMPTY);
       return;
     }
@@ -52,7 +52,7 @@ export function CommandPalette({ open, onOpenChange, sections: sectionItems = NA
       controller.abort();
       window.clearTimeout(timer);
     };
-  }, [query]);
+  }, [lookup, query]);
 
   function go(href: string) {
     onOpenChange(false);

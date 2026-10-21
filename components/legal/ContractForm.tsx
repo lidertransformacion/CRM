@@ -242,7 +242,7 @@ export function ContractForm({
             <Field label="Inicio" htmlFor="contract-start">
               <Input id="contract-start" type="date" value={startDate} onChange={(event) => setStartDate(event.target.value)} disabled={readOnly} />
             </Field>
-            <Field label="Fin" htmlFor="contract-end">
+            <Field label="Vencimiento" htmlFor="contract-end" hint="Fecha en la que vence el contrato.">
               <Input id="contract-end" type="date" value={endDate} onChange={(event) => setEndDate(event.target.value)} disabled={readOnly} />
             </Field>
             <Field label="Aviso de renovación (días)" htmlFor="contract-notice" hint="Si se deja vacío, el aviso es a 30 días.">

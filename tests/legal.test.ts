@@ -94,9 +94,11 @@ describe("legal roles", () => {
   it("treats the old user role as comercial and keeps one permission set", () => {
     expect(normalizeRole("user")).toBe("comercial");
     expect(can("user", "view_contracts")).toBe(true);
-    expect(can("comercial", "manage_files")).toBe(false);
+    expect(can("comercial", "manage_files")).toBe(true);
     expect(can("comercial", "upload_contract")).toBe(true);
+    expect(can("comercial", "manage_users")).toBe(false);
     expect(can("legal", "manage_files")).toBe(true);
+    expect(can("legal", "view_gerencia")).toBe(false);
     expect(can("gerencia", "upload_contract")).toBe(false);
     expect(can("gerencia", "view_gerencia")).toBe(true);
     expect(can("admin", "manage_users")).toBe(true);
@@ -184,7 +186,7 @@ describe("legal drive and contracts", () => {
     created.push(file);
     setLegalFilesBucketForTests(bucket);
     const people = await seed(db);
-    await expect(createFolder(db, people.comercial, null, "Privado")).rejects.toMatchObject({ status: 403 });
+    await expect(createFolder(db, people.gerencia, null, "Privado")).rejects.toMatchObject({ status: 403 });
     const root = await createFolder(db, people.legal, null, "Plantillas");
     const child = await createFolder(db, people.legal, root.id, "2026");
     await expect(createFolder(db, people.legal, root.id, "2026")).rejects.toBeInstanceOf(HttpError);
@@ -202,7 +204,7 @@ describe("legal drive and contracts", () => {
     expect(bucket.objects.get(stored.r2_key)).toEqual(bytes);
     const raw = await db.get<{ blob: unknown }>("SELECT r2_key AS blob FROM files WHERE id = ?", [stored.id]);
     expect(String(raw?.blob)).toMatch(/^files\//);
-    await expect(uploadDriveFile(db, people.comercial, { name: "otro.pdf", mime: "application/pdf", bytes })).rejects.toMatchObject({ status: 403 });
+    await expect(uploadDriveFile(db, people.gerencia, { name: "otro.pdf", mime: "application/pdf", bytes })).rejects.toMatchObject({ status: 403 });
   });
 
   it("links a contract to a deal and equipment, keeps signer order, and blocks other deals", async () => {
@@ -212,7 +214,7 @@ describe("legal drive and contracts", () => {
     const people = await seed(db);
     const bytes = new TextEncoder().encode("%PDF-1.4 firmado");
     await expect(
-      createContract(db, people.comercial, {
+      createContract(db, people.gerencia, {
         title: "Comodato norte",
         type: "comodato",
         status: "signed",

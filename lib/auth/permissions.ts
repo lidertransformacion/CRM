@@ -1,6 +1,6 @@
 import { normalizeRole, type Role } from "@/lib/auth/roles";
 
-/** What the legal module checks. Pipeline access stays as it is today. */
+/** What a contract action checks. Section access is `canAccess` in scopes.ts. */
 export type Permission =
   | "manage_users"
   | "view_contracts"
@@ -29,10 +29,10 @@ const MATRIX: Record<Role, Record<Permission, boolean>> = {
   comercial: {
     manage_users: false,
     view_contracts: true,
-    manage_files: false,
+    manage_files: true,
     upload_contract: true,
-    link_any: false,
-    view_gerencia: false,
+    link_any: true,
+    view_gerencia: true,
   },
   gerencia: {
     manage_users: false,
@@ -49,7 +49,7 @@ export function can(role: string | null | undefined, permission: Permission): bo
 }
 
 export const ROLE_LABEL: Record<Role, string> = {
-  admin: "Administrador",
+  admin: "Administrativo",
   comercial: "Comercial",
   legal: "Legal",
   gerencia: "Gerencia",

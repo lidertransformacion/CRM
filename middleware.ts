@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { agentAuthorized, allowsDuringPasswordChange, isPublicPath, isStaticAsset } from "@/lib/auth/guard";
+import { canAccess, scopeForPath } from "@/lib/auth/scopes";
 import { readSessionFromRequest } from "@/lib/auth/session";
 
 export async function middleware(request: NextRequest) {
@@ -29,6 +30,14 @@ export async function middleware(request: NextRequest) {
     if (pathname.startsWith("/api/")) return NextResponse.json({ error: "password_change_required" }, { status: 403 });
     const url = request.nextUrl.clone();
     url.pathname = "/cuenta";
+    return NextResponse.redirect(url);
+  }
+  const scope = scopeForPath(pathname, request.method);
+  if (scope && !canAccess(session.role, scope)) {
+    if (pathname.startsWith("/api/")) return NextResponse.json({ error: "No tienes acceso a esta sección." }, { status: 403 });
+    const url = request.nextUrl.clone();
+    url.pathname = "/sin-acceso";
+    url.search = "";
     return NextResponse.redirect(url);
   }
   return NextResponse.next();

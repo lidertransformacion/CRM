@@ -12,8 +12,11 @@ import { PageHeader } from "@/components/ui/page-header";
 import { weekdayLongDate } from "@/lib/home/format";
 import { homeData, summaryLine } from "@/lib/home/queries";
 import { requirePageUser } from "@/lib/auth/page-session";
+import type { SessionPayload } from "@/lib/auth/session";
 import { pendingForUser } from "@/lib/legal/signatures";
 import { getDb } from "@/lib/db";
+import { LegalSummary } from "@/components/legal/LegalSummary";
+import { GerenciaDashboard } from "@/components/gerencia/Dashboard";
 import { Card, CardHeader } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 
@@ -21,9 +24,15 @@ export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = { title: "Inicio" };
 
-/** Inicio: responde "¿qué requiere mi atención hoy?" con indicadores y listas que llevan a donde se resuelve cada cosa. */
+/** Inicio: cada rol ve su resumen. Comercial y administración ven el día comercial. */
 export default async function HomePage() {
   const session = await requirePageUser("/");
+  if (session.role === "legal") return <LegalSummary session={session} />;
+  if (session.role === "gerencia") return <GerenciaDashboard session={session} />;
+  return <CommercialHome session={session} />;
+}
+
+async function CommercialHome({ session }: { session: SessionPayload }) {
   const data = await homeData();
   const pending = await pendingForUser(await getDb(), session.uid, session.email);
   return (

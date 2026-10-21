@@ -129,10 +129,8 @@ async function openRequest(db: SqlDb, contractId: number): Promise<SignatureRequ
   );
 }
 
-function canSend(actor: Actor, contract: ContractRow): boolean {
-  if (!can(actor.role, "upload_contract")) return false;
-  if (actor.role === "admin" || actor.role === "legal") return true;
-  return actor.role === "comercial" && contract.owner_id === actor.uid;
+function canSend(actor: Actor, _contract: ContractRow): boolean {
+  return can(actor.role, "upload_contract");
 }
 
 function isCurrentSigner(step: SignatureStepRow, actor: { uid: number | null; email: string }): boolean {

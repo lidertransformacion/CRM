@@ -159,7 +159,7 @@ export function UserAdmin({ initial, currentEmail }: { initial: User[]; currentE
                   <option value="comercial">Comercial</option>
                   <option value="legal">Legal</option>
                   <option value="gerencia">Gerencia</option>
-                  <option value="admin">Administrador</option>
+                  <option value="admin">Administrativo</option>
                 </Select>
               </Field>
             </FieldGrid>

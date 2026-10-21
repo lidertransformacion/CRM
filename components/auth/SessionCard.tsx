@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardBody, CardFooter, CardHeader } from "@/components/ui/card";
 import { useToast } from "@/components/ui/toast";
+import { ROLE_LABEL } from "@/lib/auth/permissions";
 import type { Role } from "@/lib/auth/roles";
 
 /** Quién está en sesión y el botón para cerrarla (en móvil es el sitio natural para salir). */
@@ -40,13 +41,13 @@ export function SessionCard({ email, role }: { email: string; role: Role }) {
           <div>
             <dt className="text-xs font-medium text-ink-2">Rol</dt>
             <dd className="mt-1">
-              <Badge tone={role === "admin" ? "accent" : "neutral"}>{role === "admin" ? "Administrador" : "Usuario"}</Badge>
+              <Badge tone={role === "admin" ? "accent" : "neutral"}>{ROLE_LABEL[role]}</Badge>
             </dd>
           </div>
         </dl>
         {role === "admin" && (
           <p className="mt-4 text-xs text-ink-3">
-            Como administrador puedes crear usuarios y restablecer contraseñas en{" "}
+            Como administrativo puedes crear usuarios y restablecer contraseñas en{" "}
             <Link href="/ajustes" className="font-medium text-navy-2 underline-offset-4 hover:underline">
               Ajustes
             </Link>

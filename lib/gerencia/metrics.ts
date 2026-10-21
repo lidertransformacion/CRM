@@ -6,6 +6,16 @@ import type { SqlDb } from "@/lib/sql/types";
 
 export type StatusCount = { status: string; count: number };
 
+export type StageValue = { stage: string; count: number; value: number };
+
+export type PipelineProjection = {
+  weighted: number;
+  missingProbability: number;
+  closingSoon: number;
+  closingSoonValue: number;
+  byStage: StageValue[];
+};
+
 export type GerenciaSnapshot = {
   openDeals: number;
   pipelineValue: number;
@@ -16,6 +26,7 @@ export type GerenciaSnapshot = {
   signedThisMonth: number;
   expiring: number;
   pending: PendingSignature[];
+  projection: PipelineProjection;
 };
 
 type LeadRow = {
@@ -23,14 +34,29 @@ type LeadRow = {
   active: number;
   won_status: string | null;
   expected_revenue: number | null;
+  probability: number | null;
+  expected_close: string | null;
 };
 
+function dayOffset(today: Date, days: number): string {
+  const date = new Date(today.getTime());
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
 export async function gerenciaSnapshot(db: SqlDb, actor: Actor, today = new Date()): Promise<GerenciaSnapshot> {
-  const leads = await db.all<LeadRow>("SELECT stage, active, won_status, expected_revenue FROM leads");
+  const leads = await db.all<LeadRow>("SELECT stage, active, won_status, expected_revenue, probability, expected_close FROM leads");
   let openDeals = 0;
   let pipelineValue = 0;
   let won = 0;
   let lost = 0;
+  let weighted = 0;
+  let missingProbability = 0;
+  let closingSoon = 0;
+  let closingSoonValue = 0;
+  const horizon = dayOffset(today, 30);
+  const todayKey = today.toISOString().slice(0, 10);
+  const stages = new Map<string, StageValue>();
   for (const lead of leads) {
     const fact: LeadFact = {
       importKey: "",
@@ -39,15 +65,28 @@ export async function gerenciaSnapshot(db: SqlDb, actor: Actor, today = new Date
       salesperson: "",
       customer: "",
       expectedRevenue: lead.expected_revenue,
-      probability: null,
+      probability: lead.probability,
       createdAt: null,
       active: lead.active === 1,
       wonStatus: lead.won_status ?? undefined,
     };
     const kind = classifyLead(fact);
     if (kind === "open") {
+      const amount = kpiRevenue(fact) ?? 0;
       openDeals += 1;
-      pipelineValue += kpiRevenue(fact) ?? 0;
+      pipelineValue += amount;
+      const probability = lead.probability;
+      if (probability == null) missingProbability += 1;
+      else weighted += amount * (probability / 100);
+      const close = lead.expected_close?.slice(0, 10) ?? "";
+      if (close && close >= todayKey && close <= horizon) {
+        closingSoon += 1;
+        closingSoonValue += amount;
+      }
+      const bucket = stages.get(lead.stage) ?? { stage: lead.stage, count: 0, value: 0 };
+      bucket.count += 1;
+      bucket.value += amount;
+      stages.set(lead.stage, bucket);
     } else if (kind === "won") won += 1;
     else if (kind === "lost") lost += 1;
   }
@@ -70,5 +109,12 @@ export async function gerenciaSnapshot(db: SqlDb, actor: Actor, today = new Date
     signedThisMonth: Number(signed?.n ?? 0),
     expiring: expiring.length,
     pending,
+    projection: {
+      weighted,
+      missingProbability,
+      closingSoon,
+      closingSoonValue,
+      byStage: [...stages.values()].sort((a, b) => b.value - a.value),
+    },
   };
 }

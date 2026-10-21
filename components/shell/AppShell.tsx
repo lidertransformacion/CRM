@@ -15,6 +15,7 @@ import { BottomNav } from "@/components/shell/BottomNav";
 import { currentSection, isActive, navItems } from "@/components/shell/nav";
 import type { Role } from "@/lib/auth/roles";
 import { ROLE_LABEL } from "@/lib/auth/permissions";
+import { canAccess } from "@/lib/auth/scopes";
 
 export type ShellUser = { email: string; role: Role } | null;
 
@@ -38,6 +39,7 @@ export function AppShell({ children, user = null }: { children: React.ReactNode;
   }, []);
 
   const items = navItems(user?.role);
+  const searchRecords = canAccess(user?.role, "commercial");
   const palette = React.useMemo(
     () => ({
       open: () => setPaletteOpen(true),
@@ -87,27 +89,29 @@ export function AppShell({ children, user = null }: { children: React.ReactNode;
               )}
             </div>
             <div className="ml-auto flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => setPaletteOpen(true)}
-                className="inline-flex h-9 items-center gap-2 rounded-md border border-line bg-surface px-3 text-sm text-ink-3 transition-colors hover:border-[rgba(24,43,85,.3)] hover:text-ink"
-                aria-label="Buscar en todo el CRM"
-              >
-                <Search className="size-4" />
-                <span className="hidden sm:inline">
-                  Buscar cliente, equipo u oportunidad
-                </span>
-                <span className="hidden items-center gap-0.5 sm:inline-flex">
-                  <Kbd>⌘</Kbd>
-                  <Kbd>K</Kbd>
-                </span>
-              </button>
+              {searchRecords && (
+                <button
+                  type="button"
+                  onClick={() => setPaletteOpen(true)}
+                  className="inline-flex h-9 items-center gap-2 rounded-md border border-line bg-surface px-3 text-sm text-ink-3 transition-colors hover:border-[rgba(24,43,85,.3)] hover:text-ink"
+                  aria-label="Buscar en todo el CRM"
+                >
+                  <Search className="size-4" />
+                  <span className="hidden sm:inline">
+                    Buscar cliente, equipo u oportunidad
+                  </span>
+                  <span className="hidden items-center gap-0.5 sm:inline-flex">
+                    <Kbd>⌘</Kbd>
+                    <Kbd>K</Kbd>
+                  </span>
+                </button>
+              )}
             </div>
           </header>
           <main id="contenido" className="pb-[calc(3.5rem+env(safe-area-inset-bottom))] lg:pb-0">{children}</main>
         </div>
 
-        <BottomNav onMore={() => setMobileOpen(true)} moreOpen={mobileOpen} />
+        <BottomNav items={items} onMore={() => setMobileOpen(true)} moreOpen={mobileOpen} />
 
         <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
           <SheetContent side="left" size="sm" title={<BrandLockup />} description="Menú" className="[&_[data-slot=description]]:sr-only">
@@ -118,7 +122,7 @@ export function AppShell({ children, user = null }: { children: React.ReactNode;
           </SheetContent>
         </Sheet>
 
-        <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} sections={items} />
+        <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} sections={items} lookup={searchRecords} />
       </div>
     </CommandPaletteContext.Provider>
   );
@@ -152,9 +156,11 @@ function SidebarNav({ pathname, user, items }: { pathname: string; user: ShellUs
       {items.map((item) => (
         <NavRow key={item.href} href={item.href} icon={item.icon} label={item.label} description={item.description} active={isActive(pathname, item)} />
       ))}
-      <div className="mt-3.5 border-t border-line-2 pt-2">
-        <NavRow href="/ajustes" icon={Settings} label="Ajustes" description={user?.role === "admin" ? "Crear usuarios y contraseñas" : "Solo administradores"} active={settingsActive} />
-      </div>
+      {user?.role === "admin" && (
+        <div className="mt-3.5 border-t border-line-2 pt-2">
+          <NavRow href="/ajustes" icon={Settings} label="Ajustes" description="Crear usuarios y contraseñas" active={settingsActive} />
+        </div>
+      )}
     </nav>
   );
 }

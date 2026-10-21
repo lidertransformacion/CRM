@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
+import { can } from "@/lib/auth/permissions";
 import { requirePageUser } from "@/lib/auth/page-session";
 import { HttpError } from "@/lib/auth/users";
 import { contractBundle } from "@/lib/legal/contracts";
@@ -50,7 +51,7 @@ export default async function ContractPage({ params }: { params: Promise<{ id: s
       })),
     };
     const latest = await latestSignature(await getDb(), numeric);
-    const canSend = session.role === "admin" || session.role === "legal" || (session.role === "comercial" && bundle.contract.owner_id === session.uid);
+    const canSend = can(session.role, "upload_contract");
     return (
       <div className="page space-y-4">
         <PageHeader eyebrow={bundle.contract.code ?? "Contrato"} title={bundle.contract.title} description="Consulta, vínculos, novedades y orden de firma." />
