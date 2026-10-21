@@ -3,8 +3,10 @@ import { notFound } from "next/navigation";
 import { requirePageUser } from "@/lib/auth/page-session";
 import { HttpError } from "@/lib/auth/users";
 import { contractBundle } from "@/lib/legal/contracts";
+import { latestSignature } from "@/lib/legal/signatures";
 import { getDb } from "@/lib/db";
 import { ContractForm, type ContractInitial } from "@/components/legal/ContractForm";
+import { SignatureActions } from "@/components/legal/SignatureActions";
 import { PageHeader } from "@/components/ui/page-header";
 
 export const dynamic = "force-dynamic";
@@ -47,9 +49,12 @@ export default async function ContractPage({ params }: { params: Promise<{ id: s
         author_email: note.author_email ?? null,
       })),
     };
+    const latest = await latestSignature(await getDb(), numeric);
+    const canSend = session.role === "admin" || session.role === "legal" || (session.role === "comercial" && bundle.contract.owner_id === session.uid);
     return (
-      <div className="page">
+      <div className="page space-y-4">
         <PageHeader eyebrow={bundle.contract.code ?? "Contrato"} title={bundle.contract.title} description="Consulta, vínculos, novedades y orden de firma." />
+        <SignatureActions contractId={numeric} requestId={latest?.id ?? null} status={latest?.status ?? null} canSend={canSend} />
         <ContractForm mode="edit" canEdit={bundle.canEdit} initial={initial} />
       </div>
     );

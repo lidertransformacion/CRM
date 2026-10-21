@@ -9,6 +9,7 @@ export const TYPE_OPTIONS: { value: ContractType; label: string }[] = [
 
 export const STATUS_OPTIONS: { value: ContractStatus; label: string }[] = [
   { value: "draft", label: "Borrador" },
+  { value: "in_signature", label: "En firma" },
   { value: "signed", label: "Firmado" },
   { value: "active", label: "Vigente" },
   { value: "expired", label: "Vencido" },
@@ -49,6 +50,7 @@ export function signerLabel(value: string): string {
 
 export function statusTone(value: string): "neutral" | "ok" | "warn" | "danger" | "info" {
   if (value === "active" || value === "signed") return "ok";
+  if (value === "in_signature") return "warn";
   if (value === "expired") return "danger";
   if (value === "terminated") return "neutral";
   return "info";

@@ -75,11 +75,11 @@ describe("wrapD1 schema apply", () => {
 });
 
 describe("integrated migrations", () => {
-  it("applies 0003 through 0008 twice on a database that already has the columns", () => {
+  it("applies 0003 through 0009 twice on a database that already has the columns", () => {
     const file = path.join(os.tmpdir(), `crm-migrate-${Date.now()}-${Math.random().toString(16).slice(2)}.sqlite`);
     const db = openDatabaseSync(file);
     const dir = path.join(process.cwd(), "migrations");
-    const names = fs.readdirSync(dir).filter((name) => /^000[3-8]_/.test(name)).sort();
+    const names = fs.readdirSync(dir).filter((name) => /^000[3-9]_/.test(name)).sort();
     expect(names).toEqual([
       "0003_users_soft_delete.sql",
       "0004_visits.sql",
@@ -87,12 +87,15 @@ describe("integrated migrations", () => {
       "0006_rich_mail.sql",
       "0007_legal.sql",
       "0008_storage_quota.sql",
+      "0009_signatures.sql",
     ]);
     const script = names.map((name) => fs.readFileSync(path.join(dir, name), "utf8")).join("\n");
     db.exec(script);
     db.exec(script);
     const usage = db.prepare("SELECT bytes_used FROM storage_usage WHERE id = 1").get() as { bytes_used: number };
     expect(usage.bytes_used).toBe(0);
+    const agreements = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'signature_agreements'").get() as { name: string };
+    expect(agreements.name).toBe("signature_agreements");
     db.close();
     fs.rmSync(file, { force: true });
   });

@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Plus } from "lucide-react";
+import Link from "next/link";
 import { AttentionStats } from "@/components/home/AttentionStats";
 import { CommitteeCard } from "@/components/home/CommitteeCard";
 import { EquipmentCard } from "@/components/home/EquipmentCard";
@@ -10,6 +11,11 @@ import { SearchShortcut } from "@/components/home/SearchShortcut";
 import { PageHeader } from "@/components/ui/page-header";
 import { weekdayLongDate } from "@/lib/home/format";
 import { homeData, summaryLine } from "@/lib/home/queries";
+import { requirePageUser } from "@/lib/auth/page-session";
+import { pendingForUser } from "@/lib/legal/signatures";
+import { getDb } from "@/lib/db";
+import { Card, CardHeader } from "@/components/ui/card";
+import { EmptyState } from "@/components/ui/empty-state";
 
 export const dynamic = "force-dynamic";
 
@@ -17,7 +23,9 @@ export const metadata: Metadata = { title: "Inicio" };
 
 /** Inicio: responde "¿qué requiere mi atención hoy?" con indicadores y listas que llevan a donde se resuelve cada cosa. */
 export default async function HomePage() {
+  const session = await requirePageUser("/");
   const data = await homeData();
+  const pending = await pendingForUser(await getDb(), session.uid, session.email);
   return (
     <div className="page">
       <PageHeader
@@ -38,6 +46,24 @@ export default async function HomePage() {
       />
 
       <AttentionStats data={data} />
+
+      <Card className="mt-4">
+        <CardHeader title="Pendiente de mi firma" description="Contratos en los que eres el firmante en turno." actions={<Link href="/firmas" className="text-sm text-navy-2 underline">Ver firmas</Link>} />
+        {pending.length === 0 ? (
+          <EmptyState compact title="Nada por firmar" description="Cuando te toque un contrato, aparecerá aquí y en tu correo." />
+        ) : (
+          <ul className="divide-y divide-line-2">
+            {pending.map((item) => (
+              <li key={item.requestId}>
+                <Link href={`/firmas/${item.requestId}`} className="flex items-center justify-between gap-3 px-5 py-3 hover:bg-accent-soft">
+                  <span className="text-sm font-medium">{item.title}</span>
+                  <span className="text-xs text-ink-3">{item.code ?? "Contrato"} · paso {item.stepOrder}</span>
+                </Link>
+              </li>
+            ))}
+          </ul>
+        )}
+      </Card>
 
       <section className="mt-5 grid grid-cols-1 gap-4 lg:grid-cols-3" aria-label="Comité en curso">
         <div className="min-w-0 lg:col-span-2">

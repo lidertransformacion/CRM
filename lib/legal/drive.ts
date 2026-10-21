@@ -367,7 +367,7 @@ export async function deleteFile(db: SqlDb, actor: Actor, id: number): Promise<v
   if ((file.kind === "contract_signed" || signed) && actor.role !== "admin") {
     throw new HttpError(403, "Un PDF firmado no se elimina.");
   }
-  const retainBytes = file.kind === "contract_signed" || !!signed;
+  const retainBytes = file.kind === "contract_signed" || file.kind === "certificate" || !!signed;
   const now = new Date().toISOString();
   await db.run("UPDATE files SET deleted_at = ?, updated_at = ? WHERE id = ?", [now, now, id]);
   if (!retainBytes) {

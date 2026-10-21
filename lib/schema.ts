@@ -429,6 +429,7 @@ CREATE TABLE IF NOT EXISTS signature_requests (
   current_step INTEGER NOT NULL DEFAULT 1,
   final_file_id INTEGER,
   final_sha256 TEXT,
+  rejected_reason TEXT,
   created_by INTEGER NOT NULL,
   created_at TEXT NOT NULL,
   completed_at TEXT
@@ -449,11 +450,18 @@ CREATE TABLE IF NOT EXISTS signature_steps (
   output_sha256 TEXT,
   signature_image_key TEXT,
   signed_at TEXT,
+  consent_at TEXT,
   ip TEXT,
   user_agent TEXT,
   comment TEXT,
   token_hash TEXT,
   UNIQUE (request_id, step_order)
+);
+CREATE TABLE IF NOT EXISTS signature_agreements (
+  user_id INTEGER PRIMARY KEY,
+  accepted_at TEXT NOT NULL,
+  ip TEXT,
+  user_agent TEXT
 );
 CREATE TABLE IF NOT EXISTS audit_events (
   id INTEGER PRIMARY KEY,
@@ -489,11 +497,10 @@ CREATE TABLE IF NOT EXISTS storage_usage (
 `;
 
 /**
- * Integrated schema: visits, committee mail, rich mail, legal files, and the storage counter.
- * Unmerged branches stamped 5 or 6 with different tables, so 7 reapplies this script once.
+ * 8 adds the signature agreement table and the columns a live signature needs.
  * CREATE statements use IF NOT EXISTS. ALTERS run only when the column is missing.
  */
-export const SCHEMA_VERSION = "7";
+export const SCHEMA_VERSION = "8";
 
 /** Idempotent. A second run changes no row once every legacy `user` is `comercial`. */
 export const COMMERCIAL_ROLE_SQL = "UPDATE users SET role = 'comercial' WHERE role = 'user'";
@@ -517,6 +524,8 @@ export const ALTERS = [
   "ALTER TABLE email_outbox ADD COLUMN body_html TEXT",
   "ALTER TABLE email_outbox ADD COLUMN cc_email TEXT",
   "ALTER TABLE email_outbox ADD COLUMN attachment_ids TEXT",
+  "ALTER TABLE signature_requests ADD COLUMN rejected_reason TEXT",
+  "ALTER TABLE signature_steps ADD COLUMN consent_at TEXT",
 ];
 
 export { splitSqlStatements as splitSql } from "@/lib/sql/statements";

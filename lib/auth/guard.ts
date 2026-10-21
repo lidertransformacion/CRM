@@ -5,7 +5,16 @@ import { normalizeRole, readSessionFromRequest, type SessionPayload } from "@/li
 import type { SqlDb } from "@/lib/sql/types";
 
 export function isPublicPath(pathname: string): boolean {
-  return pathname === "/login" || pathname === "/api/auth/login";
+  return (
+    pathname === "/login" ||
+    pathname === "/api/auth/login" ||
+    pathname === "/verificar" ||
+    pathname.startsWith("/verificar/") ||
+    pathname.startsWith("/firmar/") ||
+    pathname === "/api/verificar" ||
+    pathname.startsWith("/api/verificar/") ||
+    pathname.startsWith("/api/firma/")
+  );
 }
 
 /** Brand files must load on the login page before a session exists. */

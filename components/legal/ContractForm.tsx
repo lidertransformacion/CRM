@@ -299,7 +299,7 @@ export function ContractForm({
       </Card>
 
       <Card>
-        <CardHeader title="Firmantes" description="El orden se guarda por contrato. Puede incluir al cliente. Todavía no se envía a firmar." />
+        <CardHeader title="Firmantes" description="Orden sugerido: comercial, legal y gerencia. Puedes cambiarlo y agregar al cliente. Se firma en ese orden." />
         <CardBody className="space-y-3">
           {signers.map((signer, index) => (
             <div key={`${signer.role}-${index}`} className="grid gap-2 rounded-lg border border-line-2 p-3 sm:grid-cols-[120px_1fr_1fr_auto]">

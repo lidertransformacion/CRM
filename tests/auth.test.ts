@@ -216,7 +216,7 @@ describe("middleware", () => {
   it("blocks every page and API except login", async () => {
     process.env.SESSION_SECRET = SECRET;
     const routes = walkRoutes(path.join(process.cwd(), "app"), "");
-    const publicRoutes = new Set(["/login", "/api/auth/login"]);
+    const publicRoutes = new Set(["/login", "/api/auth/login", "/verificar", "/verificar/sample", "/firmar/sample", "/api/verificar", "/api/firma/sample"]);
     expect(routes).toEqual(expect.arrayContaining(["/login", "/api/auth/login", "/pipeline", "/api/leads", "/api/users"]));
     for (const route of routes) {
       const response = await middleware(new NextRequest(`http://localhost${route}`));

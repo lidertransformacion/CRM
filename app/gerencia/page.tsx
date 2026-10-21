@@ -2,7 +2,8 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { can } from "@/lib/auth/permissions";
 import { requirePageUser } from "@/lib/auth/page-session";
-import { expiringContracts, listContracts } from "@/lib/legal/contracts";
+import { expiringContracts } from "@/lib/legal/contracts";
+import { gerenciaSnapshot } from "@/lib/gerencia/metrics";
 import { getDb } from "@/lib/db";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
@@ -12,6 +13,8 @@ import { statusLabel } from "@/components/legal/labels";
 
 export const dynamic = "force-dynamic";
 export const metadata: Metadata = { title: "Gerencia" };
+
+const money = new Intl.NumberFormat("es-CO", { style: "currency", currency: "COP", maximumFractionDigits: 0 });
 
 export default async function GerenciaPage() {
   const session = await requirePageUser("/gerencia");
@@ -25,31 +28,63 @@ export default async function GerenciaPage() {
   }
   const actor = { uid: session.uid, email: session.email, role: session.role, ip: null, userAgent: null };
   const db = await getDb();
-  const [all, expiring] = await Promise.all([listContracts(db, actor, ""), expiringContracts(db, actor)]);
+  const [snapshot, expiring] = await Promise.all([gerenciaSnapshot(db, actor), expiringContracts(db, actor)]);
+  const metrics = [
+    { label: "Negocios abiertos", value: String(snapshot.openDeals) },
+    { label: "Valor del pipeline", value: money.format(snapshot.pipelineValue) },
+    { label: "Ganados / perdidos", value: `${snapshot.won} / ${snapshot.lost}` },
+    { label: "Visitas", value: String(snapshot.visits) },
+    { label: "Firmados este mes", value: String(snapshot.signedThisMonth) },
+    { label: "Por vencer", value: String(snapshot.expiring) },
+  ];
   return (
-    <div className="page">
-      <PageHeader
-        eyebrow="Dirección"
-        title="Gerencia"
-        description="Vista de dirección. Los indicadores comerciales y el tablero de firmas llegan después. Por ahora: cuántos contratos hay y cuáles están por vencer."
-      />
-      <div className="grid gap-4 sm:grid-cols-2">
+    <div className="page space-y-4">
+      <PageHeader eyebrow="Dirección" title="Gerencia" description="Negocios, visitas, contratos y lo que espera tu firma." />
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        {metrics.map((item) => (
+          <Card key={item.label}>
+            <CardBody>
+              <p className="text-xs text-ink-3">{item.label}</p>
+              <p className="font-serif text-2xl text-ink">{item.value}</p>
+            </CardBody>
+          </Card>
+        ))}
+      </div>
+      <div className="grid gap-4 lg:grid-cols-2">
         <Card>
-          <CardHeader title="Contratos" description="Lectura de todo el archivo legal." />
-          <CardBody>
-            <p className="font-serif text-3xl text-ink">{all.length}</p>
-            <Link href="/legal" className="mt-2 inline-block text-sm text-navy-2 underline">Abrir contratos</Link>
-          </CardBody>
+          <CardHeader title="Contratos por estado" />
+          {snapshot.contractsByStatus.length === 0 ? (
+            <EmptyState compact title="Sin contratos" />
+          ) : (
+            <ul className="divide-y divide-line-2">
+              {snapshot.contractsByStatus.map((row) => (
+                <li key={row.status} className="flex items-center justify-between px-5 py-3 text-sm">
+                  <span>{statusLabel(row.status)}</span>
+                  <span className="font-medium">{row.count}</span>
+                </li>
+              ))}
+            </ul>
+          )}
         </Card>
         <Card>
-          <CardHeader title="Por vencer" description="Según la fecha de fin y los días de aviso." />
-          <CardBody>
-            <p className="font-serif text-3xl text-ink">{expiring.length}</p>
-            <Link href="/legal?vencer=1" className="mt-2 inline-block text-sm text-navy-2 underline">Ver la lista</Link>
-          </CardBody>
+          <CardHeader title="Pendiente de mi firma" description="Aprobaciones que están en tu turno." />
+          {snapshot.pending.length === 0 ? (
+            <EmptyState compact title="Nada pendiente" description="No tienes un contrato esperando tu firma." />
+          ) : (
+            <ul className="divide-y divide-line-2">
+              {snapshot.pending.map((item) => (
+                <li key={item.requestId}>
+                  <Link href={`/firmas/${item.requestId}`} className="flex items-center justify-between gap-3 px-5 py-3 hover:bg-accent-soft">
+                    <span className="text-sm font-medium">{item.title}</span>
+                    <Badge tone="warn" size="sm">Firmar</Badge>
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          )}
         </Card>
       </div>
-      <Card className="mt-4">
+      <Card>
         <CardHeader title="Próximos vencimientos" />
         {expiring.length === 0 ? (
           <EmptyState compact title="Nada por vencer" description="Cuando un contrato se acerque a su fecha de fin, aparecerá aquí." />

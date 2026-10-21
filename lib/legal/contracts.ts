@@ -7,7 +7,7 @@ import { ensureFolderPath, storePdf, type FileRow } from "@/lib/legal/drive";
 import type { SqlDb } from "@/lib/sql/types";
 
 export const CONTRACT_TYPES = ["comodato", "suministro", "confidencialidad", "otro"] as const;
-export const CONTRACT_STATUSES = ["draft", "signed", "active", "expired", "terminated"] as const;
+export const CONTRACT_STATUSES = ["draft", "in_signature", "signed", "active", "expired", "terminated"] as const;
 export const NOVEDAD_KINDS = ["nota", "otrosi", "renovacion", "vencimiento", "incumplimiento", "terminacion"] as const;
 export const SIGNER_ROLES = ["comercial", "legal", "gerencia", "externo"] as const;
 
@@ -374,6 +374,7 @@ export async function updateContract(
   input: ContractDraft & { links?: LinkInput[]; signers?: SignerInput[] },
 ): Promise<void> {
   if (!(await canEditContract(db, actor, id))) throw new HttpError(403, "No puedes editar este contrato.");
+  await assertSignatureClosed(db, id);
   const current = await getContract(db, id);
   if (!current) throw new HttpError(404, "No está ese contrato.");
   const title = input.title.trim();
@@ -414,6 +415,14 @@ export async function updateContract(
   });
 }
 
+async function assertSignatureClosed(db: SqlDb, contractId: number) {
+  const open = await db.get<{ id: number }>(
+    "SELECT id FROM signature_requests WHERE contract_id = ? AND status IN ('pending', 'in_progress')",
+    [contractId],
+  );
+  if (open) throw new HttpError(409, "Hay una firma en curso. Cancélala antes de cambiar el contrato.");
+}
+
 async function mergeLinks(db: SqlDb, actor: Actor, contractId: number, next: LinkInput[]): Promise<LinkInput[]> {
   const requested = await assertLinks(db, actor, next, false);
   if (can(actor.role, "link_any")) return requested;
@@ -437,6 +446,7 @@ export async function replaceContractFile(
   file: { name: string; mime: string; bytes: Uint8Array },
 ): Promise<FileRow> {
   if (!(await canEditContract(db, actor, id))) throw new HttpError(403, "No puedes cambiar el PDF de este contrato.");
+  await assertSignatureClosed(db, id);
   const contract = await getContract(db, id);
   if (!contract) throw new HttpError(404, "No está ese contrato.");
   const current = contract.current_file_id ? await db.get<FileRow>("SELECT * FROM files WHERE id = ?", [contract.current_file_id]) : undefined;

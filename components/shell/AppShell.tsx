@@ -48,7 +48,7 @@ export function AppShell({ children, user = null }: { children: React.ReactNode;
     [paletteOpen],
   );
 
-  if (pathname === "/login") {
+  if (pathname === "/login" || pathname.startsWith("/firmar") || pathname.startsWith("/verificar")) {
     return <div className="min-h-dvh bg-bg">{children}</div>;
   }
 

@@ -1,5 +1,5 @@
 import type { LucideIcon } from "lucide-react";
-import { Briefcase, ChartBar, ClipboardList, Coffee, Folder, LayoutDashboard, Mail, MapPinned, SquareKanban, Users } from "lucide-react";
+import { Briefcase, ChartBar, ClipboardList, Coffee, Folder, LayoutDashboard, Mail, MapPinned, PenLine, SquareKanban, Users } from "lucide-react";
 import { normalizeRole, type Role } from "@/lib/auth/roles";
 
 export type NavItem = { href: string; label: string; description: string; icon: LucideIcon; exact?: boolean; roles?: Role[] };
@@ -15,6 +15,7 @@ export const NAV: NavItem[] = [
   { href: "/visitas", label: "Visitas", description: "Reportes de visita y cobertura semanal", icon: MapPinned },
   { href: "/correos", label: "Correos", description: "Borradores listos para copiar", icon: Mail },
   { href: "/legal", label: "Contratos", description: "Archivos, contratos y novedades", icon: Folder },
+  { href: "/firmas", label: "Firmas", description: "Lo que te toca firmar", icon: PenLine },
   { href: "/gerencia", label: "Gerencia", description: "Vista de dirección", icon: Briefcase, roles: ["admin", "gerencia"] },
 ];
 
