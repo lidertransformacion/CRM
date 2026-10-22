@@ -34,6 +34,7 @@ export type FileRow = {
 };
 
 const FILE_COLUMNS = "id, folder_id, name, r2_key, mime, size_bytes, sha256, kind, created_by, created_at, updated_at, deleted_at";
+const FOLDER_COLUMNS = "id, parent_id, name, created_by, created_at, updated_at, deleted_at";
 
 export function cleanName(value: string, label: string): string {
   const name = value.trim().replace(/\s+/g, " ");
@@ -65,7 +66,7 @@ async function bucketOrThrow(): Promise<LegalBucket> {
 }
 
 async function liveFolder(db: SqlDb, id: number): Promise<FolderRow> {
-  const folder = await db.get<FolderRow>("SELECT * FROM folders WHERE id = ? AND deleted_at IS NULL", [id]);
+  const folder = await db.get<FolderRow>(`SELECT ${FOLDER_COLUMNS} FROM folders WHERE id = ? AND deleted_at IS NULL`, [id]);
   if (!folder) throw new HttpError(404, "No está esa carpeta.");
   return folder;
 }
@@ -77,7 +78,7 @@ export async function breadcrumbs(db: SqlDb, folderId: number | null): Promise<{
   while (current != null) {
     if (seen.has(current)) break;
     seen.add(current);
-    const folder = await db.get<FolderRow>("SELECT * FROM folders WHERE id = ? AND deleted_at IS NULL", [current]);
+    const folder = await db.get<FolderRow>(`SELECT ${FOLDER_COLUMNS} FROM folders WHERE id = ? AND deleted_at IS NULL`, [current]);
     if (!folder) break;
     trail.push({ id: folder.id, name: folder.name });
     current = folder.parent_id;
@@ -93,7 +94,7 @@ export async function listDrive(db: SqlDb, actor: Actor, folderId: number | null
   if (q) {
     const like = `%${q.replace(/[%_]/g, "")}%`;
     const folders = await db.all<FolderRow>(
-      "SELECT * FROM folders WHERE deleted_at IS NULL AND name LIKE ? ORDER BY name COLLATE NOCASE LIMIT 80",
+      `SELECT ${FOLDER_COLUMNS} FROM folders WHERE deleted_at IS NULL AND name LIKE ? ORDER BY name COLLATE NOCASE LIMIT 80`,
       [like],
     );
     const files = await db.all<FileRow>(
@@ -104,8 +105,8 @@ export async function listDrive(db: SqlDb, actor: Actor, folderId: number | null
   }
   const folders = await db.all<FolderRow>(
     folderId == null
-      ? "SELECT * FROM folders WHERE parent_id IS NULL AND deleted_at IS NULL ORDER BY name COLLATE NOCASE"
-      : "SELECT * FROM folders WHERE parent_id = ? AND deleted_at IS NULL ORDER BY name COLLATE NOCASE",
+      ? `SELECT ${FOLDER_COLUMNS} FROM folders WHERE parent_id IS NULL AND deleted_at IS NULL ORDER BY name COLLATE NOCASE`
+      : `SELECT ${FOLDER_COLUMNS} FROM folders WHERE parent_id = ? AND deleted_at IS NULL ORDER BY name COLLATE NOCASE`,
     folderId == null ? [] : [folderId],
   );
   const files = await db.all<FileRow>(
@@ -162,8 +163,8 @@ export async function ensureFolderPath(db: SqlDb, actor: Actor, names: string[])
     const name = cleanName(raw, "La carpeta");
     const existing: FolderRow | undefined =
       parent == null
-        ? await db.get<FolderRow>("SELECT * FROM folders WHERE parent_id IS NULL AND name = ? AND deleted_at IS NULL", [name])
-        : await db.get<FolderRow>("SELECT * FROM folders WHERE parent_id = ? AND name = ? AND deleted_at IS NULL", [parent, name]);
+        ? await db.get<FolderRow>(`SELECT ${FOLDER_COLUMNS} FROM folders WHERE parent_id IS NULL AND name = ? AND deleted_at IS NULL`, [name])
+        : await db.get<FolderRow>(`SELECT ${FOLDER_COLUMNS} FROM folders WHERE parent_id = ? AND name = ? AND deleted_at IS NULL`, [parent, name]);
     if (existing) {
       parent = existing.id;
       continue;

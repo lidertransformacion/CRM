@@ -1,9 +1,12 @@
 import { can } from "@/lib/auth/permissions";
 import { normalizeRole } from "@/lib/auth/session";
 import { HttpError } from "@/lib/auth/users";
-import { actorOwnsTarget, canEditContract, type Actor, type TargetType } from "@/lib/legal/access";
+import { listEquipment, listLeads } from "@/lib/db";
+import { actorOwnsTarget, canEditContract, sellerMatchesUser, type Actor, type TargetType } from "@/lib/legal/access";
 import { recordAudit } from "@/lib/legal/audit";
 import { ensureFolderPath, storePdf, type FileRow } from "@/lib/legal/drive";
+import { CONTRACT_COLUMNS, LINK_COLUMNS, SIGNER_COLUMNS } from "@/lib/sql/columns";
+import { binaryCompare, readThrough, sqlLike } from "@/lib/sql/read-cache";
 import type { SqlDb } from "@/lib/sql/types";
 
 export const CONTRACT_TYPES = ["comodato", "suministro", "confidencialidad", "otro"] as const;
@@ -298,8 +301,14 @@ export async function createContract(
   return id;
 }
 
+async function allContracts(db: SqlDb): Promise<ContractRow[]> {
+  return readThrough(db, "legal:contracts", ["legal"], () =>
+    db.all<ContractRow>(`SELECT ${CONTRACT_COLUMNS} FROM contracts ORDER BY updated_at DESC`),
+  );
+}
+
 export async function getContract(db: SqlDb, id: number): Promise<ContractRow | undefined> {
-  return db.get<ContractRow>("SELECT * FROM contracts WHERE id = ?", [id]);
+  return (await allContracts(db)).find((row) => row.id === id);
 }
 
 export async function contractBundle(db: SqlDb, actor: Actor, id: number) {
@@ -307,20 +316,18 @@ export async function contractBundle(db: SqlDb, actor: Actor, id: number) {
   const contract = await getContract(db, id);
   if (!contract) throw new HttpError(404, "No está ese contrato.");
   const file = contract.current_file_id
-    ? await db.get<FileRow>("SELECT * FROM files WHERE id = ? AND deleted_at IS NULL", [contract.current_file_id])
+    ? await db.get<FileRow>("SELECT id, folder_id, name, r2_key, mime, size_bytes, sha256, kind, created_by, created_at, updated_at, deleted_at FROM files WHERE id = ? AND deleted_at IS NULL", [contract.current_file_id])
     : undefined;
-  const links = await db.all<LinkRow>("SELECT * FROM contract_links WHERE contract_id = ? ORDER BY id", [id]);
+  const links = await db.all<LinkRow>(`SELECT ${LINK_COLUMNS} FROM contract_links WHERE contract_id = ? ORDER BY id`, [id]);
   const novedades = await db.all<NovedadRow>(
-    `SELECT n.*, u.email AS author_email
+    `SELECT n.id, n.contract_id, n.kind, n.body, n.file_id, n.due_date, n.created_by, n.created_at, u.email AS author_email
      FROM contract_novedades n LEFT JOIN users u ON u.id = n.created_by
      WHERE n.contract_id = ? ORDER BY n.created_at, n.id`,
     [id],
   );
-  const signers = await db.all<SignerRow>("SELECT * FROM contract_signers WHERE contract_id = ? ORDER BY step_order", [id]);
-  const labeled = [];
-  for (const link of links) {
-    labeled.push({ ...link, label: await targetLabel(db, link.target_type, link.target_key) });
-  }
+  const signers = await db.all<SignerRow>(`SELECT ${SIGNER_COLUMNS} FROM contract_signers WHERE contract_id = ? ORDER BY step_order`, [id]);
+  const labels = await labelsForLinks(db, links);
+  const labeled = links.map((link) => ({ ...link, label: labels.get(`${link.target_type}:${link.target_key}`) ?? link.target_key }));
   return {
     contract,
     file: file ?? null,
@@ -335,31 +342,49 @@ export async function describeTarget(db: SqlDb, type: TargetType, key: string): 
   return { target_type: type, target_key: key, label: await targetLabel(db, type, key) };
 }
 
-async function targetLabel(db: SqlDb, type: TargetType, key: string): Promise<string> {
-  if (type === "lead") {
-    const lead = await db.get<{ name: string; customer: string | null }>("SELECT name, customer FROM leads WHERE import_key = ?", [key]);
-    return lead ? lead.customer || lead.name : key;
+async function labelsForLinks(db: SqlDb, links: LinkRow[]): Promise<Map<string, string>> {
+  const labels = new Map<string, string>();
+  const leadKeys = new Set(links.filter((link) => link.target_type === "lead").map((link) => link.target_key));
+  const serials = new Set(links.filter((link) => link.target_type === "equipment").map((link) => link.target_key));
+  if (leadKeys.size) {
+    for (const lead of await listLeads(db)) {
+      if (leadKeys.has(lead.import_key)) labels.set(`lead:${lead.import_key}`, lead.customer || lead.name);
+    }
   }
-  const equipment = await db.get<{ name: string; client_name: string | null; store_code: string }>(
-    "SELECT name, client_name, store_code FROM equipment WHERE serial = ?",
-    [key],
-  );
-  return equipment ? `${equipment.store_code} · ${equipment.client_name || equipment.name}` : key;
+  if (serials.size) {
+    for (const item of await listEquipment(db)) {
+      if (serials.has(item.serial)) labels.set(`equipment:${item.serial}`, `${item.store_code} · ${item.client_name || item.name}`);
+    }
+  }
+  return labels;
+}
+
+async function targetLabel(db: SqlDb, type: TargetType, key: string): Promise<string> {
+  const labels = await labelsForLinks(db, [{ id: 0, contract_id: 0, target_type: type, target_key: key, created_by: 0, created_at: "" }]);
+  return labels.get(`${type}:${key}`) ?? key;
+}
+
+function contractMatches(query: string, row: ContractRow): boolean {
+  const q = query.trim().replace(/[%_]/g, "");
+  if (!q) return true;
+  const like = `%${q}%`;
+  return sqlLike(like, row.title) || sqlLike(like, row.code) || sqlLike(like, row.counterparty_name ?? "");
 }
 
 export async function listContracts(db: SqlDb, actor: Actor, query: string) {
   requireView(actor);
-  const q = query.trim();
-  const rows = q
-    ? await db.all<ContractRow>(
-        `SELECT * FROM contracts
-         WHERE title LIKE ? OR code LIKE ? OR IFNULL(counterparty_name, '') LIKE ?
-         ORDER BY updated_at DESC LIMIT 200`,
-        [`%${q.replace(/[%_]/g, "")}%`, `%${q.replace(/[%_]/g, "")}%`, `%${q.replace(/[%_]/g, "")}%`],
-      )
-    : await db.all<ContractRow>("SELECT * FROM contracts ORDER BY updated_at DESC LIMIT 200");
   const today = todayBogota();
-  return rows.map((row) => ({ ...row, expiring: isExpiring(row, today) }));
+  return (await allContracts(db))
+    .filter((row) => contractMatches(query, row))
+    .slice(0, 200)
+    .map((row) => ({ ...row, expiring: isExpiring(row, today) }));
+}
+
+/** Every contract, so the screen can filter title, client, and expiry without another query. */
+export async function contractCatalog(db: SqlDb, actor: Actor) {
+  requireView(actor);
+  const today = todayBogota();
+  return (await allContracts(db)).map((row) => ({ ...row, expiring: isExpiring(row, today) }));
 }
 
 export async function expiringContracts(db: SqlDb, actor: Actor) {
@@ -426,7 +451,7 @@ async function assertSignatureClosed(db: SqlDb, contractId: number) {
 async function mergeLinks(db: SqlDb, actor: Actor, contractId: number, next: LinkInput[]): Promise<LinkInput[]> {
   const requested = await assertLinks(db, actor, next, false);
   if (can(actor.role, "link_any")) return requested;
-  const existing = await db.all<LinkRow>("SELECT * FROM contract_links WHERE contract_id = ?", [contractId]);
+  const existing = await db.all<LinkRow>(`SELECT ${LINK_COLUMNS} FROM contract_links WHERE contract_id = ?`, [contractId]);
   const kept: LinkInput[] = [];
   for (const link of existing) {
     if (!(await actorOwnsTarget(db, actor, link.target_type, link.target_key))) {
@@ -449,7 +474,9 @@ export async function replaceContractFile(
   await assertSignatureClosed(db, id);
   const contract = await getContract(db, id);
   if (!contract) throw new HttpError(404, "No está ese contrato.");
-  const current = contract.current_file_id ? await db.get<FileRow>("SELECT * FROM files WHERE id = ?", [contract.current_file_id]) : undefined;
+  const current = contract.current_file_id
+    ? await db.get<FileRow>("SELECT id, folder_id, name, r2_key, mime, size_bytes, sha256, kind, created_by, created_at, updated_at, deleted_at FROM files WHERE id = ?", [contract.current_file_id])
+    : undefined;
   const year = String(new Date().getUTCFullYear());
   const folderId = current?.folder_id ?? (await ensureFolderPath(db, actor, ["Contratos", year, filingClient(contract.counterparty_name)]));
   const stored = await storePdf(db, actor, {
@@ -515,46 +542,57 @@ export async function linksForTarget(db: SqlDb, actor: Actor, type: TargetType, 
   );
 }
 
+function createdDesc(left: string | null | undefined, right: string | null | undefined): number {
+  if (left == null && right == null) return 0;
+  if (left == null) return 1;
+  if (right == null) return -1;
+  return binaryCompare(right, left);
+}
+
 export async function searchTargets(db: SqlDb, actor: Actor, query: string) {
   if (!can(actor.role, "upload_contract")) throw new HttpError(403, "No puedes vincular contratos.");
   const q = query.trim().replace(/[%_]/g, "");
   const like = `%${q}%`;
-  const leads = await db.all<{ import_key: string; name: string; customer: string | null; salesperson: string | null }>(
-    q
-      ? `SELECT import_key, name, customer, salesperson FROM leads
-         WHERE name LIKE ? OR IFNULL(customer, '') LIKE ? OR import_key LIKE ? OR IFNULL(salesperson, '') LIKE ?
-         ORDER BY created_at DESC LIMIT 40`
-      : `SELECT import_key, name, customer, salesperson FROM leads ORDER BY created_at DESC LIMIT 20`,
-    q ? [like, like, like, like] : [],
-  );
-  const equipment = await db.all<{ serial: string; name: string; client_name: string | null; salesperson: string | null; store_code: string; lead_import_key: string | null }>(
-    q
-      ? `SELECT serial, name, client_name, salesperson, store_code, lead_import_key FROM equipment
-         WHERE name LIKE ? OR serial LIKE ? OR IFNULL(client_name, '') LIKE ? OR store_code LIKE ?
-         ORDER BY updated_at DESC LIMIT 40`
-      : `SELECT serial, name, client_name, salesperson, store_code, lead_import_key FROM equipment ORDER BY updated_at DESC LIMIT 20`,
-    q ? [like, like, like, like] : [],
-  );
-  const leadHits = [];
-  for (const lead of leads) {
-    if (!can(actor.role, "link_any") && !(await actorOwnsTarget(db, actor, "lead", lead.import_key))) continue;
-    leadHits.push({ target_type: "lead" as const, target_key: lead.import_key, label: lead.customer || lead.name, hint: lead.salesperson });
-  }
-  const equipmentHits = [];
-  for (const item of equipment) {
-    if (!can(actor.role, "link_any") && !(await actorOwnsTarget(db, actor, "equipment", item.serial))) continue;
-    equipmentHits.push({
-      target_type: "equipment" as const,
-      target_key: item.serial,
-      label: `${item.store_code} · ${item.client_name || item.name}`,
-      hint: item.salesperson,
-    });
-  }
-  return { leads: leadHits.slice(0, 20), equipment: equipmentHits.slice(0, 20) };
+  const limit = q ? 40 : 20;
+  const allLeads = await listLeads(db);
+  const leadByKey = new Map(allLeads.map((lead) => [lead.import_key, lead]));
+  const leads = allLeads
+    .filter((lead) => !q || sqlLike(like, lead.name) || sqlLike(like, lead.customer ?? "") || sqlLike(like, lead.import_key) || sqlLike(like, lead.salesperson ?? ""))
+    .sort((a, b) => createdDesc(a.created_at, b.created_at))
+    .slice(0, limit);
+  const equipment = (await listEquipment(db))
+    .filter((item) => !q || sqlLike(like, item.name) || sqlLike(like, item.serial) || sqlLike(like, item.client_name ?? "") || sqlLike(like, item.store_code))
+    .sort((a, b) => createdDesc(a.updated_at, b.updated_at))
+    .slice(0, limit);
+  const anyLink = can(actor.role, "link_any");
+  const ownsLeadRow = (lead: (typeof leads)[number]) => anyLink || sellerMatchesUser(lead.salesperson, actor.email);
+  const ownsEquipmentRow = (item: (typeof equipment)[number]) => {
+    if (anyLink) return true;
+    if (sellerMatchesUser(item.salesperson, actor.email)) return true;
+    const lead = item.lead_import_key ? leadByKey.get(item.lead_import_key) : undefined;
+    return !!lead && sellerMatchesUser(lead.salesperson, actor.email);
+  };
+  return {
+    leads: leads
+      .filter(ownsLeadRow)
+      .slice(0, 20)
+      .map((lead) => ({ target_type: "lead" as const, target_key: lead.import_key, label: lead.customer || lead.name, hint: lead.salesperson })),
+    equipment: equipment
+      .filter(ownsEquipmentRow)
+      .slice(0, 20)
+      .map((item) => ({
+        target_type: "equipment" as const,
+        target_key: item.serial,
+        label: `${item.store_code} · ${item.client_name || item.name}`,
+        hint: item.salesperson,
+      })),
+  };
 }
 
 export async function directory(db: SqlDb, actor: Actor) {
   if (!can(actor.role, "upload_contract")) throw new HttpError(403, "No puedes asignar firmantes.");
-  const rows = await db.all<{ id: number; email: string; role: string }>("SELECT id, email, role FROM users ORDER BY email");
+  const rows = await readThrough(db, "users:directory", ["users"], () =>
+    db.all<{ id: number; email: string; role: string }>("SELECT id, email, role FROM users ORDER BY email"),
+  );
   return rows.map((row) => ({ ...row, role: normalizeRole(row.role) }));
 }

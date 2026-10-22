@@ -1,4 +1,6 @@
 import { HttpError } from "@/lib/auth/users";
+import { PHOTO_COLUMNS, VISIT_COLUMNS, VISIT_POINT_COLUMNS } from "@/lib/sql/columns";
+import { readThrough } from "@/lib/sql/read-cache";
 import { fold } from "@/lib/visits/catalog";
 import { decodeVisitCode, findVisitCodes } from "@/lib/visits/codec";
 import { SEED_POINTS } from "@/lib/visits/points-seed";
@@ -44,8 +46,20 @@ function leadKey(leads: { import_key: string; customer: string | null; name: str
   return hit?.import_key ?? null;
 }
 
-/** Inserts any catalog point that is not already stored. Safe to call on every visits request. */
+function seedStamp(): string {
+  let hash = SEED_POINTS.length;
+  for (const point of SEED_POINTS) {
+    for (let index = 0; index < point.id.length; index += 1) hash = (hash * 33 + point.id.charCodeAt(index)) >>> 0;
+  }
+  return `${SEED_POINTS.length}:${hash.toString(16)}`;
+}
+
+/** Inserts any catalog point that is not already stored. A warm request does not rescan. */
 export async function ensureVisitPoints(db: SqlDb): Promise<number> {
+  return readThrough(db, `visits:seed:${seedStamp()}`, ["visits", "leads"], () => ensureVisitPointsFresh(db));
+}
+
+async function ensureVisitPointsFresh(db: SqlDb): Promise<number> {
   const existing = await db.all<{ id: string }>("SELECT id FROM visit_points");
   const have = new Set(existing.map((row) => row.id));
   const missing = SEED_POINTS.filter((point) => !have.has(point.id));
@@ -83,6 +97,10 @@ export async function ensureVisitPoints(db: SqlDb): Promise<number> {
 }
 
 export async function listPoints(db: SqlDb): Promise<VisitPoint[]> {
+  return readThrough(db, "visits:points", ["visits"], () => listPointsFresh(db));
+}
+
+async function listPointsFresh(db: SqlDb): Promise<VisitPoint[]> {
   const rows = await db.all<{
     id: string;
     legal_name: string;
@@ -98,7 +116,7 @@ export async function listPoints(db: SqlDb): Promise<VisitPoint[]> {
     training_frequency: string;
     training_barista: string;
     lead_import_key: string | null;
-  }>("SELECT * FROM visit_points WHERE active = 1 ORDER BY trade_name, point_name");
+  }>(`SELECT ${VISIT_POINT_COLUMNS} FROM visit_points WHERE active = 1 ORDER BY trade_name, point_name`);
   return rows.map((row) => ({
     id: row.id,
     legalName: row.legal_name,
@@ -139,7 +157,7 @@ async function hydrate(db: SqlDb, row: VisitRow): Promise<VisitRecord> {
   const parsed = normalizeVisit(JSON.parse(row.payload) as Partial<VisitRecord>);
   parsed.id = row.id;
   parsed.status = row.status === "final" ? "final" : "borrador";
-  const media = await db.all<PhotoRow>("SELECT * FROM visit_photos WHERE visit_id = ? ORDER BY sort_order, id", [row.id]);
+  const media = await db.all<PhotoRow>(`SELECT ${PHOTO_COLUMNS} FROM visit_photos WHERE visit_id = ? ORDER BY sort_order, id`, [row.id]);
   const photos: VisitPhoto[] = [];
   for (const item of media) {
     const src = await readStored(item);
@@ -152,7 +170,11 @@ async function hydrate(db: SqlDb, row: VisitRow): Promise<VisitRecord> {
 }
 
 export async function listVisits(db: SqlDb): Promise<VisitRecord[]> {
-  const rows = await db.all<VisitRow>("SELECT * FROM visits ORDER BY fecha DESC, updated_at DESC");
+  return readThrough(db, "visits:list", ["visits"], () => listVisitsFresh(db));
+}
+
+async function listVisitsFresh(db: SqlDb): Promise<VisitRecord[]> {
+  const rows = await db.all<VisitRow>(`SELECT ${VISIT_COLUMNS} FROM visits ORDER BY fecha DESC, updated_at DESC`);
   return rows.map((row) => {
     const visit = normalizeVisit(JSON.parse(row.payload) as Partial<VisitRecord>);
     visit.id = row.id;
@@ -165,14 +187,16 @@ export async function listVisits(db: SqlDb): Promise<VisitRecord[]> {
 }
 
 export async function listVisitBriefs(db: SqlDb): Promise<VisitBrief[]> {
-  const rows = await db.all<{ id: string; cliente: string | null; sede: string | null; fecha: string | null; status: string }>(
-    "SELECT id, cliente, sede, fecha, status FROM visits",
+  const rows = await readThrough(db, "visits:briefs", ["visits"], () =>
+    db.all<{ id: string; cliente: string | null; sede: string | null; fecha: string | null; status: string }>(
+      "SELECT id, cliente, sede, fecha, status FROM visits",
+    ),
   );
   return rows.map((row) => ({ id: row.id, cliente: row.cliente || "", sede: row.sede || "", fecha: row.fecha || "", status: row.status }));
 }
 
 export async function getVisit(db: SqlDb, id: string): Promise<VisitRecord | null> {
-  const row = await db.get<VisitRow>("SELECT * FROM visits WHERE id = ?", [id]);
+  const row = await db.get<VisitRow>(`SELECT ${VISIT_COLUMNS} FROM visits WHERE id = ?`, [id]);
   if (!row) return null;
   return hydrate(db, row);
 }

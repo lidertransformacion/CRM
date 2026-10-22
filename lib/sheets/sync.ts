@@ -4,6 +4,7 @@ import { parseHours, parseWarranty, warrantyStateOn } from "@/lib/equipment/warr
 import { getSheetsAdapter } from "@/lib/sheets/adapter";
 import { planPull, planPush } from "@/lib/sheets/diff";
 import type { EquipmentSyncRow, PullPlan, PushPlan, SheetSnapshot } from "@/lib/sheets/types";
+import { EQUIPMENT_SYNC_COLUMNS } from "@/lib/sql/columns";
 import type { SqlDb } from "@/lib/sql/types";
 import { todayIso } from "@/lib/utils";
 
@@ -80,7 +81,7 @@ function toSyncRow(row: EquipmentRecord): EquipmentSyncRow {
 }
 
 async function localRows(db: SqlDb): Promise<EquipmentSyncRow[]> {
-  const rows = await db.all<EquipmentRecord>("SELECT * FROM equipment");
+  const rows = await db.all<EquipmentRecord>(`SELECT ${EQUIPMENT_SYNC_COLUMNS} FROM equipment`);
   return rows.map(toSyncRow);
 }
 
@@ -112,23 +113,50 @@ function mapped(cells: Record<string, string>) {
   };
 }
 
-async function nextAsset(db: SqlDb): Promise<number> {
-  const row = await db.get<{ asset_number: string }>("SELECT asset_number FROM equipment ORDER BY asset_number DESC LIMIT 1");
-  if (!row) return 1;
-  const parsed = Number(row.asset_number.replace(/\D/g, ""));
-  return Number.isFinite(parsed) ? parsed + 1 : 1;
-}
-
-async function nextSiteSeq(db: SqlDb, siteId: string): Promise<number> {
-  const row = await db.get<{ n: number }>("SELECT COALESCE(MAX(site_seq), 0) AS n FROM equipment WHERE site_id = ?", [siteId]);
-  return Number(row?.n ?? 0) + 1;
+async function equipmentIndex(db: SqlDb) {
+  const rows = await db.all<EquipmentRecord>(`SELECT ${EQUIPMENT_SYNC_COLUMNS} FROM equipment`);
+  const bySerial = new Map<string, EquipmentRecord>();
+  const bySheet = new Map<string, EquipmentRecord>();
+  const maxSeq = new Map<string, number>();
+  for (const row of rows) {
+    bySerial.set(row.serial, row);
+    if (row.sheet_serial) bySheet.set(row.sheet_serial, row);
+    maxSeq.set(row.site_id, Math.max(maxSeq.get(row.site_id) ?? 0, row.site_seq));
+  }
+  const assetRow = await db.get<{ asset_number: string }>("SELECT asset_number FROM equipment ORDER BY asset_number DESC LIMIT 1");
+  let asset = assetRow ? Number(assetRow.asset_number.replace(/\D/g, "")) : 0;
+  if (!Number.isFinite(asset)) asset = 0;
+  return {
+    find(serial: string) {
+      return bySerial.get(serial) ?? bySheet.get(serial);
+    },
+    seqFor(siteId: string, preferred: number | null, current?: EquipmentRecord) {
+      if (preferred != null) {
+        maxSeq.set(siteId, Math.max(maxSeq.get(siteId) ?? 0, preferred));
+        return preferred;
+      }
+      if (current && current.site_id === siteId) return current.site_seq;
+      const next = (maxSeq.get(siteId) ?? 0) + 1;
+      maxSeq.set(siteId, next);
+      return next;
+    },
+    nextAsset() {
+      asset += 1;
+      return asset;
+    },
+    remember(row: EquipmentRecord) {
+      bySerial.set(row.serial, row);
+      if (row.sheet_serial) bySheet.set(row.sheet_serial, row);
+      maxSeq.set(row.site_id, Math.max(maxSeq.get(row.site_id) ?? 0, row.site_seq));
+    },
+  };
 }
 
 /** Sheet wins. Local-only serials stay. Rows are never deleted. */
 export async function applySnapshot(db: SqlDb, snapshot: SheetSnapshot): Promise<PullApplyResult> {
   const result: PullApplyResult = { written: true, reason: "La hoja quedó aplicada por serial.", updated: 0, inserted: 0, skipped: [] };
   const now = new Date().toISOString();
-  let asset = await nextAsset(db);
+  const index = await equipmentIndex(db);
   for (const row of snapshot.rows) {
     const serial = row.serial.trim();
     if (!serial) continue;
@@ -141,8 +169,8 @@ export async function applySnapshot(db: SqlDb, snapshot: SheetSnapshot): Promise
       result.skipped.push({ serial, message: "La sede de la hoja no está en la lista." });
       continue;
     }
-    const current = await db.get<EquipmentRecord>("SELECT * FROM equipment WHERE serial = ? OR sheet_serial = ?", [serial, serial]);
-    const seq = fields.seq ?? (current && current.site_id === fields.siteId ? current.site_seq : await nextSiteSeq(db, fields.siteId));
+    const current = index.find(serial);
+    const seq = index.seqFor(fields.siteId, fields.seq, current);
     const code = storeCode(fields.siteId, seq);
     const status = fields.location.client || fields.location.address ? "en_comodato" : "en_tienda";
     const cells = JSON.stringify(row.cells);
@@ -189,9 +217,17 @@ export async function applySnapshot(db: SqlDb, snapshot: SheetSnapshot): Promise
           fields.name,
         ]);
       }
+      current.site_id = fields.siteId;
+      current.site_seq = seq;
+      current.sheet_serial = serial;
+      current.name = fields.name;
+      current.category = fields.category || current.category;
+      current.status = nextStatus;
+      index.remember(current);
       result.updated += 1;
       continue;
     }
+    const asset = index.nextAsset();
     await db.run(
       `INSERT INTO equipment (
         serial, sheet_serial, asset_number, name, category, site_id, site_seq, store_code, supplier, supplier_reference, model,
@@ -228,7 +264,31 @@ export async function applySnapshot(db: SqlDb, snapshot: SheetSnapshot): Promise
         now,
       ],
     );
-    asset += 1;
+    index.remember({
+      serial,
+      sheet_serial: serial,
+      name: fields.name,
+      category: fields.category || "Sin categoría",
+      site_id: fields.siteId,
+      site_seq: seq,
+      store_code: code,
+      supplier: fields.supplier,
+      supplier_reference: fields.reference,
+      model: fields.model,
+      warranty_until: fields.warrantyUntil,
+      warranty_raw: fields.warrantyRaw,
+      maintenance_every_days: fields.every,
+      hours_min: fields.hours.min,
+      hours_max: fields.hours.max,
+      hours_label: fields.hoursLabel,
+      location_raw: fields.locationRaw,
+      client_name: fields.location.client,
+      address: fields.location.address,
+      city: fields.location.city,
+      status,
+      dirty_json: "[]",
+      sheet_cells_json: cells,
+    });
     result.inserted += 1;
   }
   return result;
@@ -236,22 +296,29 @@ export async function applySnapshot(db: SqlDb, snapshot: SheetSnapshot): Promise
 
 export async function rememberPush(db: SqlDb, plan: PushPlan): Promise<number> {
   const now = new Date().toISOString();
+  const rows = await db.all<{ serial: string; sheet_serial: string | null; sheet_cells_json: string }>(
+    "SELECT serial, sheet_serial, sheet_cells_json FROM equipment",
+  );
+  const byKey = new Map<string, { sheet_cells_json: string }>();
+  for (const row of rows) {
+    byKey.set(row.serial, row);
+    if (row.sheet_serial) byKey.set(row.sheet_serial, row);
+  }
   let cleared = 0;
   for (const update of plan.updates) {
-    const current = await db.get<{ sheet_cells_json: string }>("SELECT sheet_cells_json FROM equipment WHERE serial = ? OR sheet_serial = ?", [
-      update.serial,
-      update.serial,
-    ]);
+    const current = byKey.get(update.serial);
     if (!current) continue;
     const cells = JSON.parse(current.sheet_cells_json) as Record<string, string>;
     for (const change of update.changes) cells[change.column] = change.to;
+    const sheetCells = JSON.stringify(cells);
     const result = await db.run("UPDATE equipment SET dirty_json = '[]', sheet_serial = ?, sheet_cells_json = ?, updated_at = ? WHERE serial = ? OR sheet_serial = ?", [
       update.serial,
-      JSON.stringify(cells),
+      sheetCells,
       now,
       update.serial,
       update.serial,
     ]);
+    current.sheet_cells_json = sheetCells;
     cleared += result.changes;
   }
   for (const insert of plan.inserts) {

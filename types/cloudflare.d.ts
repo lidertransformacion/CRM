@@ -28,7 +28,7 @@ declare module "cloudflare:workers" {
 
 interface D1Result<T = Record<string, unknown>> {
   results?: T[];
-  meta?: { changes?: number; last_row_id?: number };
+  meta?: { changes?: number; last_row_id?: number; rows_read?: number; rows_written?: number };
 }
 
 interface D1Prepared {

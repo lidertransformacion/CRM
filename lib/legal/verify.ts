@@ -1,5 +1,7 @@
 import { auditCanonical } from "@/lib/legal/audit";
 import { sha256Hex, sha256Text } from "@/lib/legal/storage";
+import { AUDIT_COLUMNS } from "@/lib/sql/columns";
+import { readThrough } from "@/lib/sql/read-cache";
 import type { SqlDb } from "@/lib/sql/types";
 
 export type HashMatch = {
@@ -27,7 +29,7 @@ type AuditRow = {
 
 /** True when every audit row still hashes to the stored chain. */
 export async function auditChainIntact(db: SqlDb): Promise<boolean> {
-  const rows = await db.all<AuditRow>("SELECT * FROM audit_events ORDER BY id");
+  const rows = await readThrough(db, "legal:audit", ["legal"], () => db.all<AuditRow>(`SELECT ${AUDIT_COLUMNS} FROM audit_events ORDER BY id`));
   let previous = "";
   for (const row of rows) {
     if ((row.prev_hash ?? "") !== previous) return false;

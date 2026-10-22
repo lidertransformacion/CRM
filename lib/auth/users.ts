@@ -2,6 +2,8 @@ import { BOOTSTRAP_ADMIN_EMAIL, isLibertarioEmail, normalizeEmail } from "@/lib/
 import { hashPassword, verifyPassword } from "@/lib/auth/password";
 import { normalizeRole, type Role } from "@/lib/auth/session";
 import { readEnv } from "@/lib/env";
+import { USER_COLUMNS } from "@/lib/sql/columns";
+import { readThrough } from "@/lib/sql/read-cache";
 import type { SqlDb } from "@/lib/sql/types";
 
 export type UserRow = {
@@ -63,7 +65,7 @@ export async function ensureBootstrapAdmin(db: SqlDb): Promise<void> {
 
 export async function authenticate(db: SqlDb, email: string, password: string): Promise<UserRow> {
   const normalized = normalizeEmail(email);
-  const user = await db.get<UserRow>("SELECT * FROM users WHERE email = ?", [normalized]);
+  const user = await db.get<UserRow>(`SELECT ${USER_COLUMNS} FROM users WHERE email = ?`, [normalized]);
   if (!user || !(await verifyPassword(normalizePassword(password), user.password_hash))) {
     throw new HttpError(401, "Correo o contraseña incorrectos.");
   }
@@ -113,7 +115,7 @@ export async function changePassword(db: SqlDb, userId: number, currentPassword:
   const current = normalizePassword(currentPassword);
   const next = normalizePassword(nextPassword);
   assertPassword(next);
-  const user = await db.get<UserRow>("SELECT * FROM users WHERE id = ?", [userId]);
+  const user = await db.get<UserRow>(`SELECT ${USER_COLUMNS} FROM users WHERE id = ?`, [userId]);
   if (!user) throw new HttpError(401, "unauthorized");
   if (!(await verifyPassword(current, user.password_hash))) {
     throw new HttpError(400, "La contraseña actual no coincide.");
@@ -131,7 +133,7 @@ export async function setTemporaryPassword(db: SqlDb, email: string, password: s
   const normalized = normalizeEmail(email);
   const next = normalizePassword(password);
   assertPassword(next);
-  const user = await db.get<UserRow>("SELECT * FROM users WHERE email = ?", [normalized]);
+  const user = await db.get<UserRow>(`SELECT ${USER_COLUMNS} FROM users WHERE email = ?`, [normalized]);
   if (!user) throw new HttpError(404, "No hay un usuario con ese correo.");
   const now = new Date().toISOString();
   await db.run(
@@ -156,11 +158,13 @@ export async function setEmailOptOut(db: SqlDb, userId: number, optOut: boolean)
 }
 
 export async function listUsers(db: SqlDb): Promise<Omit<UserRow, "password_hash">[]> {
-  const rows = await db.all<Omit<UserRow, "password_hash"> & { role: string }>(
-    `SELECT id, email, role, must_change_password, email_opt_out, session_version, active, deleted_at, created_at, updated_at
-     FROM users
-     WHERE COALESCE(active, 1) = 1 AND deleted_at IS NULL
-     ORDER BY email`,
+  const rows = await readThrough(db, "users:active", ["users"], () =>
+    db.all<Omit<UserRow, "password_hash"> & { role: string }>(
+      `SELECT id, email, role, must_change_password, email_opt_out, session_version, active, deleted_at, created_at, updated_at
+       FROM users
+       WHERE COALESCE(active, 1) = 1 AND deleted_at IS NULL
+       ORDER BY email`,
+    ),
   );
   return rows.map((row) => ({ ...row, role: normalizeRole(row.role) }));
 }
@@ -176,7 +180,7 @@ export async function deactivateUser(
 ): Promise<{ id: number; email: string }> {
   if (actor.role !== "admin") throw new HttpError(403, "Solo un administrador puede quitar personas del equipo.");
   if (!Number.isInteger(userId) || userId <= 0) throw new HttpError(400, "Usuario inválido.");
-  const target = await db.get<UserRow>("SELECT * FROM users WHERE id = ?", [userId]);
+  const target = await db.get<UserRow>(`SELECT ${USER_COLUMNS} FROM users WHERE id = ?`, [userId]);
   if (!target || target.active === 0 || target.deleted_at) throw new HttpError(404, "Ese usuario no está en el equipo.");
   if (target.role === "admin") {
     const admins = await db.get<{ n: number }>(
@@ -209,7 +213,7 @@ export async function deactivateUser(
 }
 
 export async function userById(db: SqlDb, id: number): Promise<UserRow | undefined> {
-  const row = await db.get<UserRow & { role: string }>("SELECT * FROM users WHERE id = ?", [id]);
+  const row = await db.get<UserRow & { role: string }>(`SELECT ${USER_COLUMNS} FROM users WHERE id = ?`, [id]);
   return row ? { ...row, role: normalizeRole(row.role) } : undefined;
 }
 

@@ -8,6 +8,8 @@ import { appendCertificate, stampSignature, type CertificateStep } from "@/lib/l
 import { legalFilesBucket, sha256Hex, sha256Text } from "@/lib/legal/storage";
 import { enqueueEmail } from "@/lib/mail/outbox";
 import { releaseBytes, reserveBytes } from "@/lib/storage/quota";
+import { REQUEST_COLUMNS, STEP_COLUMNS } from "@/lib/sql/columns";
+import { readThrough } from "@/lib/sql/read-cache";
 import type { SqlDb } from "@/lib/sql/types";
 
 export type SignatureRequestRow = {
@@ -115,16 +117,16 @@ async function notify(
 }
 
 async function stepsOf(db: SqlDb, requestId: number): Promise<SignatureStepRow[]> {
-  return db.all<SignatureStepRow>("SELECT * FROM signature_steps WHERE request_id = ? ORDER BY step_order", [requestId]);
+  return db.all<SignatureStepRow>(`SELECT ${STEP_COLUMNS} FROM signature_steps WHERE request_id = ? ORDER BY step_order`, [requestId]);
 }
 
 async function requestById(db: SqlDb, id: number): Promise<SignatureRequestRow | undefined> {
-  return db.get<SignatureRequestRow>("SELECT * FROM signature_requests WHERE id = ?", [id]);
+  return db.get<SignatureRequestRow>(`SELECT ${REQUEST_COLUMNS} FROM signature_requests WHERE id = ?`, [id]);
 }
 
 async function openRequest(db: SqlDb, contractId: number): Promise<SignatureRequestRow | undefined> {
   return db.get<SignatureRequestRow>(
-    "SELECT * FROM signature_requests WHERE contract_id = ? AND status IN ('pending', 'in_progress') ORDER BY id DESC LIMIT 1",
+    `SELECT ${REQUEST_COLUMNS} FROM signature_requests WHERE contract_id = ? AND status IN ('pending', 'in_progress') ORDER BY id DESC LIMIT 1`,
     [contractId],
   );
 }
@@ -194,7 +196,7 @@ async function persistPdf(
       userAgent: input.userAgent,
       data: { sha256: sha, size_bytes: size, kind: input.kind },
     });
-    const row = await db.get<FileRow>("SELECT * FROM files WHERE id = ?", [result.lastInsertRowid]);
+    const row = await db.get<FileRow>("SELECT id, folder_id, name, r2_key, mime, size_bytes, sha256, kind, created_by, created_at, updated_at, deleted_at FROM files WHERE id = ?", [result.lastInsertRowid]);
     if (!row) throw new HttpError(500, "No se pudo leer el PDF firmado.");
     return row;
   } catch (error) {
@@ -214,7 +216,7 @@ export async function sendForSignature(db: SqlDb, actor: Actor, contractId: numb
   if (!canSend(actor, contract)) throw new HttpError(403, "No puedes enviar este contrato a firma.");
   if (!contract.current_file_id) throw new HttpError(400, "El contrato no tiene PDF.");
   if (await openRequest(db, contractId)) throw new HttpError(409, "Ya hay una firma en curso.");
-  const file = await db.get<FileRow>("SELECT * FROM files WHERE id = ? AND deleted_at IS NULL", [contract.current_file_id]);
+  const file = await db.get<FileRow>("SELECT id, folder_id, name, r2_key, mime, size_bytes, sha256, kind, created_by, created_at, updated_at, deleted_at FROM files WHERE id = ? AND deleted_at IS NULL", [contract.current_file_id]);
   if (!file) throw new HttpError(400, "El PDF del contrato ya no está.");
   let signers = await db.all<{ role: string; signer_user_id: number | null; signer_email: string; signer_name: string | null }>(
     "SELECT role, signer_user_id, signer_email, signer_name FROM contract_signers WHERE contract_id = ? ORDER BY step_order",
@@ -294,7 +296,7 @@ async function activeStep(db: SqlDb, requestId: number): Promise<{ request: Sign
   const contract = await getContract(db, request.contract_id);
   if (!contract) throw new HttpError(404, "No está ese contrato.");
   const step = await db.get<SignatureStepRow>(
-    "SELECT * FROM signature_steps WHERE request_id = ? AND step_order = ? AND status = 'active'",
+    `SELECT ${STEP_COLUMNS} FROM signature_steps WHERE request_id = ? AND step_order = ? AND status = 'active'`,
     [requestId, request.current_step],
   );
   if (!step) throw new HttpError(409, "No hay un firmante en turno.");
@@ -401,7 +403,7 @@ async function applySignature(
   if (!png && typed.length < 2) throw new HttpError(400, "Dibuja tu firma o escribe tu nombre.");
   const currentFileId = contract.current_file_id;
   if (!currentFileId) throw new HttpError(400, "El contrato no tiene PDF.");
-  const file = await db.get<FileRow>("SELECT * FROM files WHERE id = ? AND deleted_at IS NULL", [currentFileId]);
+  const file = await db.get<FileRow>("SELECT id, folder_id, name, r2_key, mime, size_bytes, sha256, kind, created_by, created_at, updated_at, deleted_at FROM files WHERE id = ? AND deleted_at IS NULL", [currentFileId]);
   if (!file) throw new HttpError(404, "El PDF no está.");
   const bytes = await fileBytes(file);
   const inputSha = await sha256Hex(bytes);
@@ -616,20 +618,22 @@ export type PendingSignature = {
 };
 
 export async function pendingForUser(db: SqlDb, userId: number, email: string): Promise<PendingSignature[]> {
-  return db.all<PendingSignature>(
-    `SELECT r.id AS requestId, r.contract_id AS contractId, c.title AS title, c.code AS code, s.role AS role, s.step_order AS stepOrder
-     FROM signature_steps s
-     JOIN signature_requests r ON r.id = s.request_id
-     JOIN contracts c ON c.id = r.contract_id
-     WHERE s.status = 'active' AND r.status = 'in_progress'
-       AND (s.signer_user_id = ? OR lower(s.signer_email) = lower(?))
-     ORDER BY r.id`,
-    [userId, email],
+  return readThrough(db, `signatures:pending:${userId}:${email.toLowerCase()}`, ["legal"], () =>
+    db.all<PendingSignature>(
+      `SELECT r.id AS requestId, r.contract_id AS contractId, c.title AS title, c.code AS code, s.role AS role, s.step_order AS stepOrder
+       FROM signature_steps s
+       JOIN signature_requests r ON r.id = s.request_id
+       JOIN contracts c ON c.id = r.contract_id
+       WHERE s.status = 'active' AND r.status = 'in_progress'
+         AND (s.signer_user_id = ? OR lower(s.signer_email) = lower(?))
+       ORDER BY r.id`,
+      [userId, email],
+    ),
   );
 }
 
 export async function latestSignature(db: SqlDb, contractId: number): Promise<SignatureRequestRow | undefined> {
-  return db.get<SignatureRequestRow>("SELECT * FROM signature_requests WHERE contract_id = ? ORDER BY id DESC LIMIT 1", [contractId]);
+  return db.get<SignatureRequestRow>(`SELECT ${REQUEST_COLUMNS} FROM signature_requests WHERE contract_id = ? ORDER BY id DESC LIMIT 1`, [contractId]);
 }
 
 export async function envelopeForUser(db: SqlDb, actor: Actor, requestId: number) {
@@ -668,7 +672,7 @@ function maskEmail(email: string): string {
 
 async function stepByToken(db: SqlDb, token: string): Promise<{ request: SignatureRequestRow; step: SignatureStepRow; contract: ContractRow }> {
   const hash = await sha256Text(token);
-  const step = await db.get<SignatureStepRow>("SELECT * FROM signature_steps WHERE token_hash = ?", [hash]);
+  const step = await db.get<SignatureStepRow>(`SELECT ${STEP_COLUMNS} FROM signature_steps WHERE token_hash = ?`, [hash]);
   if (!step) throw new HttpError(404, "Este enlace de firma no es válido.");
   const request = await requestById(db, step.request_id);
   if (!request) throw new HttpError(404, "Este enlace de firma no es válido.");
@@ -730,15 +734,17 @@ export async function rejectWithToken(
 }
 
 export async function listMySignatures(db: SqlDb, userId: number, email: string) {
-  const pending = await pendingForUser(db, userId, email);
-  const history = await db.all<{ requestId: number; contractId: number; title: string; status: string; role: string }>(
-    `SELECT r.id AS requestId, c.id AS contractId, c.title AS title, r.status AS status, s.role AS role
-     FROM signature_steps s
-     JOIN signature_requests r ON r.id = s.request_id
-     JOIN contracts c ON c.id = r.contract_id
-     WHERE s.signer_user_id = ? OR lower(s.signer_email) = lower(?)
-     ORDER BY r.id DESC LIMIT 40`,
-    [userId, email],
-  );
-  return { pending, history };
+  return readThrough(db, `signatures:mine:${userId}:${email.toLowerCase()}`, ["legal"], async () => {
+    const pending = await pendingForUser(db, userId, email);
+    const history = await db.all<{ requestId: number; contractId: number; title: string; status: string; role: string }>(
+      `SELECT r.id AS requestId, c.id AS contractId, c.title AS title, r.status AS status, s.role AS role
+       FROM signature_steps s
+       JOIN signature_requests r ON r.id = s.request_id
+       JOIN contracts c ON c.id = r.contract_id
+       WHERE s.signer_user_id = ? OR lower(s.signer_email) = lower(?)
+       ORDER BY r.id DESC LIMIT 40`,
+      [userId, email],
+    );
+    return { pending, history };
+  });
 }

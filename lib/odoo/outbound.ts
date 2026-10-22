@@ -1,3 +1,4 @@
+import { OUTBOUND_COLUMNS } from "@/lib/sql/columns";
 import type { SqlDb } from "@/lib/sql/types";
 
 export type OutboundRow = {
@@ -49,7 +50,7 @@ export async function queueOutbound(db: SqlDb, kind: "create" | "update", localK
 
 export async function listPendingOutbound(db: SqlDb, limit = 50): Promise<OutboundRow[]> {
   return db.all<OutboundRow>(
-    `SELECT * FROM odoo_outbound WHERE status = 'pending' ORDER BY id LIMIT ?`,
+    `SELECT ${OUTBOUND_COLUMNS} FROM odoo_outbound WHERE status = 'pending' ORDER BY id LIMIT ?`,
     [limit],
   );
 }
@@ -59,7 +60,7 @@ export async function acknowledgeOutbound(
   id: number,
   body: { odooId?: string | number | null; error?: string | null },
 ): Promise<{ localKey: string; kind: string; odooId: string | null }> {
-  const row = await db.get<OutboundRow>("SELECT * FROM odoo_outbound WHERE id = ?", [id]);
+  const row = await db.get<OutboundRow>(`SELECT ${OUTBOUND_COLUMNS} FROM odoo_outbound WHERE id = ?`, [id]);
   if (!row) throw new Error("No está esa solicitud.");
   if (row.status !== "pending") throw new Error("Esa solicitud ya fue acusada.");
   const now = nowIso();

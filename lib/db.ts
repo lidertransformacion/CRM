@@ -10,13 +10,15 @@ import { cohortsFromDocs, diffDocuments } from "@/lib/committee/compare";
 import type { CommitteeAction, CommitteeDoc } from "@/lib/committee/types";
 import { assetNumber, siteById, storeCode } from "@/lib/equipment/catalog";
 import { maintenanceCost, parseWarranty } from "@/lib/equipment/warranty";
-import { computeKpis, type ActivityFact } from "@/lib/kpi/compute";
+import { computeKpis } from "@/lib/kpi/compute";
 import { OdooSyncAdapter, type OdooCrmAdapter } from "@/lib/odoo/adapter";
 import { assignLeadKeys, mapActivityRow, mapLeadRow, mapTeamRows } from "@/lib/odoo/map";
 import { readXlsxBuffer, readXlsxRows } from "@/lib/odoo/xlsx";
 import { snapshotFromCsv } from "@/lib/sheets/csv";
 import { planPull, planPush } from "@/lib/sheets/diff";
 import type { EquipmentSyncRow } from "@/lib/sheets/types";
+import { ACTIVITY_COLUMNS, EQUIPMENT_COLUMNS, HISTORY_COLUMNS, LEAD_COLUMNS, MAINTENANCE_COLUMNS } from "@/lib/sql/columns";
+import { binaryCompare, readThrough, sqlLike } from "@/lib/sql/read-cache";
 import { stripHtml, todayIso } from "@/lib/utils";
 
 
@@ -55,10 +57,6 @@ export type EquipmentRow = {
   updated_at: string;
 };
 
-
-function plainRows<T extends object>(rows: T[]): T[] {
-  return rows.map((row) => ({ ...row }));
-}
 
 type Prep = {
   get: (...params: unknown[]) => Promise<unknown>;
@@ -260,35 +258,32 @@ async function catalog(db: unknown, kind: string, value: string) {
   await sql.prepare("INSERT INTO catalogs (kind, value, sort_order) VALUES (?, ?, ?) ON CONFLICT(kind, value) DO NOTHING").run(kind, value, count.n + 1);
 }
 
-export async function currentCommittee(db?: unknown): { id: number; doc: CommitteeDoc } {
-  const sql = await sqlOf(db);
-  const row = await sql.prepare("SELECT id, payload FROM committee_docs WHERE is_current = 1").get() as { id: number; payload: string };
-  return { id: row.id, doc: JSON.parse(row.payload) as CommitteeDoc };
+export async function currentCommittee(db?: unknown): Promise<{ id: number; doc: CommitteeDoc }> {
+  const sql = await rawDb(db);
+  return readThrough(sql, "committee:current", ["committee"], async () => {
+    const row = await sql.get<{ id: number; payload: string }>("SELECT id, payload FROM committee_docs WHERE is_current = 1");
+    return { id: row!.id, doc: JSON.parse(row!.payload) as CommitteeDoc };
+  });
 }
 
 export async function committeeHistory(db?: unknown) {
-  const sql = await sqlOf(db);
-  const docs = await sql.prepare("SELECT id, number, held_on, is_current FROM committee_docs ORDER BY number").all() as {
-    id: number;
-    number: number;
-    held_on: string;
-    is_current: number;
-  }[];
-  const current = (await currentCommittee(db)).doc;
-  const withDocs = new Set(docs.map((doc) => doc.number));
-  const calendarOnly = current.calendar
-    .filter((entry) => !withDocs.has(entry.number))
-    .map((entry) => ({ id: null, number: entry.number, held_on: entry.heldOn, is_current: 0, snapshot: false }));
-  return [
-    ...calendarOnly,
-    ...docs.map((doc) => ({ ...doc, snapshot: true, is_current: doc.is_current })),
-  ].sort((a, b) => a.number - b.number);
+  const sql = await rawDb(db);
+  return readThrough(sql, "committee:history", ["committee"], async () => {
+    const docs = await sql.all<{ id: number; number: number; held_on: string; is_current: number }>(
+      "SELECT id, number, held_on, is_current FROM committee_docs ORDER BY number",
+    );
+    const current = (await currentCommittee(sql)).doc;
+    const withDocs = new Set(docs.map((doc) => doc.number));
+    const calendarOnly = current.calendar
+      .filter((entry) => !withDocs.has(entry.number))
+      .map((entry) => ({ id: null, number: entry.number, held_on: entry.heldOn, is_current: 0, snapshot: false }));
+    return [...calendarOnly, ...docs.map((doc) => ({ ...doc, snapshot: true, is_current: doc.is_current }))].sort((a, b) => a.number - b.number);
+  });
 }
 
-export async function committeeByNumber(number: number, db?: unknown): CommitteeDoc | null {
-  const sql = await sqlOf(db);
-  const row = await sql.prepare("SELECT payload FROM committee_docs WHERE number = ?").get(number) as { payload: string } | undefined;
-  return row ? (JSON.parse(row.payload) as CommitteeDoc) : null;
+export async function committeeByNumber(number: number, db?: unknown): Promise<CommitteeDoc | null> {
+  const docs = await allCommitteeDocs(db);
+  return docs.find((doc) => doc.committee.number === number) ?? null;
 }
 
 export async function mutateCommittee(action: CommitteeAction, db?: unknown): CommitteeDoc {
@@ -322,11 +317,12 @@ export async function mutateCommittee(action: CommitteeAction, db?: unknown): Co
   return next;
 }
 
-export async function allCommitteeDocs(db?: unknown): CommitteeDoc[] {
-  const sql = await sqlOf(db);
-  return (await sql.prepare("SELECT payload FROM committee_docs ORDER BY number").all() as { payload: string }[]).map(
-    (row) => JSON.parse(row.payload) as CommitteeDoc,
-  );
+export async function allCommitteeDocs(db?: unknown): Promise<CommitteeDoc[]> {
+  const sql = await rawDb(db);
+  return readThrough(sql, "committee:docs", ["committee"], async () => {
+    const rows = await sql.all<{ payload: string }>("SELECT payload FROM committee_docs ORDER BY number");
+    return rows.map((row) => JSON.parse(row.payload) as CommitteeDoc);
+  });
 }
 
 export async function compareCommittees(left: number, right: number, db?: unknown) {
@@ -362,12 +358,97 @@ export type LeadRecord = {
   edited_locally: number;
 };
 
-/** Columns the board and the list render. The sheet loads tags, loss reason, and activity text by key. */
-const LEAD_LIST_SQL = `SELECT import_key, name, stage, team, salesperson, customer, expected_revenue, probability, created_at, next_activity_deadline, active, edited_locally, won_status FROM leads`;
+/** Columns the board, the sheet, and the detail panel share. One cached read serves all three. */
+const LEAD_LIST_SQL = `SELECT ${LEAD_COLUMNS} FROM leads`;
+
+type ActivityRow = {
+  id: number;
+  odoo_lead_id: string | null;
+  document_name: string;
+  summary: string;
+  activity_type: string;
+  deadline: string | null;
+  state: string;
+  created_at: string | null;
+  note: string;
+  assignee: string;
+  lead_import_key: string | null;
+};
+
+type HistoryRow = { id: number; serial: string; at: string; field: string; from_value: string | null; to_value: string | null };
+
+type MaintenanceRow = {
+  id: number;
+  serial: string;
+  performed_on: string;
+  kind: string;
+  hours: number;
+  parts_cost: number;
+  technician: string | null;
+  notes: string | null;
+  condition_after: string | null;
+  visit_cost: number;
+  created_at: string;
+};
+
+function pipelineAmount(lead: LeadRecord): number {
+  const status = (lead.won_status ?? "").toLowerCase();
+  const open =
+    lead.active === 1 &&
+    !["ganado", "won", "perdido", "lost"].includes(status) &&
+    !["CIERRE/ GANADO", "OPORTUNIDAD PERDIDA", "CLIENTE RECURRENTE"].includes(lead.stage);
+  return open ? (lead.expected_revenue ?? 0) : 0;
+}
 
 export async function listLeads(db?: unknown): Promise<LeadRecord[]> {
   const sql = await rawDb(db);
-  return plainRows(await sql.all<LeadRecord>(LEAD_LIST_SQL));
+  return readThrough(sql, "leads:list", ["leads"], () => sql.all<LeadRecord>(LEAD_LIST_SQL));
+}
+
+export async function activityRows(db?: unknown): Promise<ActivityRow[]> {
+  const sql = await rawDb(db);
+  return readThrough(sql, "activities:all", ["activities"], () => sql.all<ActivityRow>(`SELECT ${ACTIVITY_COLUMNS} FROM activities`));
+}
+
+async function equipmentRows(db?: unknown): Promise<EquipmentRow[]> {
+  const sql = await rawDb(db);
+  return readThrough(sql, "equipment:all", ["equipment"], () =>
+    sql.all<EquipmentRow>(`SELECT ${EQUIPMENT_COLUMNS} FROM equipment ORDER BY site_id, site_seq`),
+  );
+}
+
+async function historyRows(db?: unknown): Promise<HistoryRow[]> {
+  const sql = await rawDb(db);
+  return readThrough(sql, "equipment:history", ["equipment"], () => sql.all<HistoryRow>(`SELECT ${HISTORY_COLUMNS} FROM equipment_history`));
+}
+
+async function maintenanceRows(db?: unknown): Promise<MaintenanceRow[]> {
+  const sql = await rawDb(db);
+  return readThrough(sql, "maintenance:logs", ["maintenance"], () => sql.all<MaintenanceRow>(`SELECT ${MAINTENANCE_COLUMNS} FROM maintenance_logs`));
+}
+
+async function settingsMap(db?: unknown): Promise<Record<string, string>> {
+  const sql = await rawDb(db);
+  return readThrough(sql, "settings:all", ["settings"], async () => {
+    const rows = await sql.all<{ key: string; value: string }>("SELECT key, value FROM app_settings");
+    return Object.fromEntries(rows.map((row) => [row.key, row.value]));
+  });
+}
+
+export async function catalogRows(db?: unknown): Promise<{ kind: string; value: string; sort_order: number }[]> {
+  const sql = await rawDb(db);
+  return readThrough(sql, "catalogs:all", ["catalogs"], () =>
+    sql.all<{ kind: string; value: string; sort_order: number }>("SELECT kind, value, sort_order FROM catalogs ORDER BY sort_order, value"),
+  );
+}
+
+async function targetRows(db?: unknown) {
+  const sql = await rawDb(db);
+  return readThrough(sql, "targets:all", ["targets"], () =>
+    sql.all<{ id: number; salesperson: string; metric: string; period: string; target_value: number }>(
+      "SELECT id, salesperson, metric, period, target_value FROM kpi_targets ORDER BY period, salesperson",
+    ),
+  );
 }
 
 export async function updateLead(importKey: string, patch: Record<string, string | number | null>, db?: unknown) {
@@ -407,118 +488,116 @@ export async function updateLead(importKey: string, patch: Record<string, string
 }
 
 export async function globalSearch(query: string, db?: unknown) {
-  const sql = await rawDb(db);
   const like = `%${query.trim()}%`;
-  const [leads, equipment, clients] = await sql.batch([
-    {
-      sql: `SELECT import_key, name, customer, salesperson, stage, expected_revenue FROM leads
-            WHERE name LIKE ? OR customer LIKE ? OR salesperson LIKE ?
-            ORDER BY customer LIMIT 6`,
-      params: [like, like, like],
-    },
-    {
-      sql: `SELECT serial, name, store_code, asset_number, client_name FROM equipment
-            WHERE serial LIKE ? OR name LIKE ? OR store_code LIKE ? OR asset_number LIKE ? OR IFNULL(client_name, '') LIKE ?
-            ORDER BY store_code LIMIT 6`,
-      params: [like, like, like, like, like],
-    },
-    {
-      sql: `SELECT customer, opportunities, pipeline, comodatos FROM (
-              SELECT lead_stats.customer AS customer,
-                     lead_stats.opportunities AS opportunities,
-                     lead_stats.pipeline AS pipeline,
-                     COALESCE(equip_stats.comodatos, 0) AS comodatos
-              FROM (
-                SELECT customer, COUNT(*) AS opportunities,
-                       SUM(CASE WHEN active = 1
-                         AND lower(COALESCE(won_status, '')) NOT IN ('ganado', 'won', 'perdido', 'lost')
-                         AND stage NOT IN ('CIERRE/ GANADO', 'OPORTUNIDAD PERDIDA', 'CLIENTE RECURRENTE')
-                         THEN COALESCE(expected_revenue, 0) ELSE 0 END) AS pipeline
-                FROM leads WHERE customer LIKE ? GROUP BY customer
-              ) AS lead_stats
-              LEFT JOIN (
-                SELECT client_name AS customer, COUNT(*) AS comodatos
-                FROM equipment WHERE client_name LIKE ? GROUP BY client_name
-              ) AS equip_stats ON equip_stats.customer = lead_stats.customer
-              UNION
-              SELECT equip_stats.customer, 0, 0, equip_stats.comodatos
-              FROM (
-                SELECT client_name AS customer, COUNT(*) AS comodatos
-                FROM equipment WHERE client_name LIKE ? GROUP BY client_name
-              ) AS equip_stats
-              LEFT JOIN (
-                SELECT customer FROM leads WHERE customer LIKE ? GROUP BY customer
-              ) AS lead_names ON lead_names.customer = equip_stats.customer
-              WHERE lead_names.customer IS NULL
-            ) ORDER BY pipeline DESC, customer LIMIT 6`,
-      params: [like, like, like, like],
-    },
-  ]);
+  const [leads, equipment, clients] = await Promise.all([listLeads(db), equipmentRows(db), clientDirectory(db)]);
   return {
-    leads: leads as { import_key: string; name: string; customer: string; stage: string }[],
-    equipment: equipment as { serial: string; name: string; store_code: string; client_name: string | null }[],
-    clients: clients as { customer: string; opportunities: number; pipeline: number; comodatos: number }[],
+    leads: leads
+      .filter((lead) => sqlLike(like, lead.name) || sqlLike(like, lead.customer) || sqlLike(like, lead.salesperson))
+      .sort((a, b) => binaryCompare(a.customer ?? "", b.customer ?? ""))
+      .slice(0, 6)
+      .map((lead) => ({
+        import_key: lead.import_key,
+        name: lead.name,
+        customer: lead.customer,
+        salesperson: lead.salesperson,
+        stage: lead.stage,
+        expected_revenue: lead.expected_revenue,
+      })),
+    equipment: equipment
+      .filter(
+        (row) =>
+          sqlLike(like, row.serial) ||
+          sqlLike(like, row.name) ||
+          sqlLike(like, row.store_code) ||
+          sqlLike(like, row.asset_number) ||
+          sqlLike(like, row.client_name ?? ""),
+      )
+      .sort((a, b) => binaryCompare(a.store_code, b.store_code))
+      .slice(0, 6)
+      .map((row) => ({ serial: row.serial, name: row.name, store_code: row.store_code, asset_number: row.asset_number, client_name: row.client_name })),
+    clients: clients
+      .filter((row) => sqlLike(like, row.customer))
+      .sort((a, b) => b.pipeline - a.pipeline || binaryCompare(a.customer, b.customer))
+      .slice(0, 6),
   };
 }
 
 export async function searchLeads(query: string, db?: unknown) {
-  const sql = await sqlOf(db);
   const like = `%${query.trim()}%`;
-  return (await sql
-    .prepare(
-      `SELECT import_key, name, customer, salesperson, stage, expected_revenue FROM leads
-       WHERE name LIKE ? OR customer LIKE ? OR salesperson LIKE ?
-       ORDER BY customer LIMIT 20`,
-    )
-    .all(like, like, like)) as Pick<LeadRecord, "import_key" | "name" | "customer" | "salesperson" | "stage" | "expected_revenue">[];
+  return (await listLeads(db))
+    .filter((lead) => sqlLike(like, lead.name) || sqlLike(like, lead.customer) || sqlLike(like, lead.salesperson))
+    .sort((a, b) => binaryCompare(a.customer ?? "", b.customer ?? ""))
+    .slice(0, 20)
+    .map((lead) => ({
+      import_key: lead.import_key,
+      name: lead.name,
+      customer: lead.customer,
+      salesperson: lead.salesperson,
+      stage: lead.stage,
+      expected_revenue: lead.expected_revenue,
+    }));
 }
 
 export async function leadLabel(importKey: string | null, db?: unknown) {
-  const sql = await sqlOf(db);
   if (!importKey) return null;
-  return (
-    (await sql.prepare("SELECT import_key, name, customer, stage FROM leads WHERE import_key = ?").get(importKey) as
-      | { import_key: string; name: string; customer: string; stage: string }
-      | undefined) ?? null
-  );
+  const lead = (await listLeads(db)).find((row) => row.import_key === importKey);
+  return lead ? { import_key: lead.import_key, name: lead.name, customer: lead.customer, stage: lead.stage } : null;
+}
+
+function leadFact(lead: LeadRecord) {
+  return {
+    importKey: lead.import_key,
+    name: lead.name,
+    stage: lead.stage,
+    salesperson: lead.salesperson,
+    customer: lead.customer,
+    expectedRevenue: lead.expected_revenue,
+    probability: lead.probability,
+    createdAt: lead.created_at,
+    active: !!lead.active,
+    wonStatus: lead.won_status,
+  };
 }
 
 export async function kpiData(asOf = todayIso(), db?: unknown) {
   const sql = await rawDb(db);
-  const [activities, leads, targets] = await sql.batch([
-    { sql: "SELECT assignee, deadline, state FROM activities" },
-    { sql: "SELECT import_key, name, stage, salesperson, customer, expected_revenue, probability, created_at, active, won_status FROM leads" },
-    { sql: "SELECT id, salesperson, metric, period, target_value FROM kpi_targets ORDER BY period, salesperson" },
-  ]);
-  const bundle = computeKpis(
-    (leads as LeadRecord[]).map((lead) => ({
-      importKey: lead.import_key,
-      name: lead.name,
-      stage: lead.stage,
-      salesperson: lead.salesperson,
-      customer: lead.customer,
-      expectedRevenue: lead.expected_revenue,
-      probability: lead.probability,
-      createdAt: lead.created_at,
-      active: !!lead.active,
-      wonStatus: lead.won_status,
-    })),
-    activities as ActivityFact[],
-    asOf,
+  const period = asOf.slice(0, 7);
+  const closed = period < todayIso().slice(0, 7);
+  return readThrough(
+    sql,
+    `kpi:${asOf}`,
+    ["leads", "activities", "targets"],
+    async () => {
+      const [leads, activities, targets] = await Promise.all([listLeads(sql), activityRows(sql), targetRows(sql)]);
+      const bundle = computeKpis(
+        leads.map(leadFact),
+        activities.map((activity) => ({ assignee: activity.assignee, deadline: activity.deadline, state: activity.state })),
+        asOf,
+      );
+      return { ...bundle, targets, metricsReady: true as const };
+    },
+    closed
+      ? {
+          async restore(token) {
+            const row = await sql.get<{ token: string; payload: string }>(
+              "SELECT token, payload FROM kpi_period_facts WHERE period = ? AND as_of = ?",
+              [period, asOf],
+            );
+            if (!row || row.token !== token) return undefined;
+            return JSON.parse(row.payload) as unknown;
+          },
+          async persist(token, value) {
+            const payload = JSON.stringify(value);
+            if (payload.length > 1_800_000) return;
+            await sql.run(
+              `INSERT INTO kpi_period_facts (period, as_of, token, payload) VALUES (?, ?, ?, ?)
+               ON CONFLICT(period, as_of) DO UPDATE SET token = excluded.token, payload = excluded.payload`,
+              [period, asOf, token, payload],
+            );
+          },
+        }
+      : undefined,
   );
-  return {
-    ...bundle,
-    targets: plainRows(
-      targets as {
-        id: number;
-        salesperson: string;
-        metric: string;
-        period: string;
-        target_value: number;
-      }[],
-    ),
-    metricsReady: true,
-  };
 }
 
 export async function saveTarget(input: { salesperson: string; metric: string; period: string; targetValue: number }, db?: unknown) {
@@ -536,48 +615,34 @@ export async function deleteTarget(id: number, db?: unknown) {
 
 /** Full rows, including sheet cell JSON. The desk uses equipmentDesk(), which omits that JSON. */
 export async function listEquipment(db?: unknown): Promise<EquipmentRow[]> {
-  const sql = await rawDb(db);
-  return plainRows(await sql.all<EquipmentRow>("SELECT * FROM equipment ORDER BY site_id, site_seq"));
+  return equipmentRows(db);
 }
 
-export async function getEquipment(serial: string, db?: unknown): EquipmentRow | undefined {
-  const sql = await sqlOf(db);
-  return await sql.prepare("SELECT * FROM equipment WHERE serial = ?").get(serial) as EquipmentRow | undefined;
+export async function getEquipment(serial: string, db?: unknown): Promise<EquipmentRow | undefined> {
+  return (await equipmentRows(db)).find((row) => row.serial === serial);
 }
 
 export async function equipmentHistory(serial: string, db?: unknown) {
-  const sql = await sqlOf(db);
-  return await sql.prepare("SELECT * FROM equipment_history WHERE serial = ? ORDER BY id DESC").all(serial) as {
-    id: number;
-    serial: string;
-    at: string;
-    field: string;
-    from_value: string | null;
-    to_value: string | null;
-  }[];
+  return (await historyRows(db)).filter((row) => row.serial === serial).sort((a, b) => b.id - a.id);
 }
 
 export async function maintenanceLogs(serial: string, db?: unknown) {
-  const sql = await sqlOf(db);
-  return await sql.prepare("SELECT * FROM maintenance_logs WHERE serial = ? ORDER BY performed_on DESC, id DESC").all(serial) as {
-    id: number;
-    serial: string;
-    performed_on: string;
-    kind: string;
-    hours: number;
-    parts_cost: number;
-    technician: string | null;
-    notes: string | null;
-    condition_after: string | null;
-    visit_cost: number;
-    created_at: string;
-  }[];
+  return (await maintenanceRows(db))
+    .filter((row) => row.serial === serial)
+    .sort((a, b) => binaryCompare(b.performed_on, a.performed_on) || b.id - a.id);
+}
+
+export async function lastMaintenanceMap(db?: unknown): Promise<Record<string, string>> {
+  const map: Record<string, string> = {};
+  for (const log of await maintenanceRows(db)) {
+    if (!map[log.serial] || log.performed_on > map[log.serial]) map[log.serial] = log.performed_on;
+  }
+  return map;
 }
 
 export async function hourlyRate(db?: unknown): Promise<number> {
-  const sql = await sqlOf(db);
-  const row = await sql.prepare("SELECT value FROM app_settings WHERE key = ?").get("maintenance_hourly_rate_cop") as { value: string } | undefined;
-  return Number(row?.value ?? 50000);
+  const settings = await settingsMap(db);
+  return Number(settings.maintenance_hourly_rate_cop ?? 50000);
 }
 
 export async function setHourlyRate(value: number, db?: unknown) {
@@ -588,9 +653,8 @@ export async function setHourlyRate(value: number, db?: unknown) {
   );
 }
 
-export async function catalogValues(kind: string, db?: unknown): string[] {
-  const sql = await sqlOf(db);
-  return (await sql.prepare("SELECT value FROM catalogs WHERE kind = ? ORDER BY sort_order, value").all(kind) as { value: string }[]).map((row) => row.value);
+export async function catalogValues(kind: string, db?: unknown): Promise<string[]> {
+  return (await catalogRows(db)).filter((row) => row.kind === kind).map((row) => row.value);
 }
 
 export async function addCatalogValue(kind: string, value: string, db?: unknown) {
@@ -849,89 +913,81 @@ export async function sheetPlans(db?: unknown) {
 }
 
 export async function clientDirectory(db?: unknown) {
-  const sql = await sqlOf(db);
-  const leads = await sql.prepare(
-    `SELECT customer, COUNT(*) AS opportunities,
-            SUM(CASE WHEN active = 1
-              AND lower(COALESCE(won_status, '')) NOT IN ('ganado', 'won', 'perdido', 'lost')
-              AND stage NOT IN ('CIERRE/ GANADO', 'OPORTUNIDAD PERDIDA', 'CLIENTE RECURRENTE')
-              THEN COALESCE(expected_revenue, 0) ELSE 0 END) AS pipeline
-     FROM leads WHERE customer != '' GROUP BY customer`,
-  ).all() as { customer: string; opportunities: number; pipeline: number }[];
-  const equipment = await sql.prepare(
-    `SELECT client_name AS customer, COUNT(*) AS comodatos FROM equipment WHERE client_name IS NOT NULL AND client_name != '' GROUP BY client_name`,
-  ).all() as { customer: string; comodatos: number }[];
-  const map = new Map<string, { customer: string; opportunities: number; pipeline: number; comodatos: number }>();
-  for (const lead of leads) map.set(lead.customer, { ...lead, comodatos: 0 });
-  for (const item of equipment) {
-    const current = map.get(item.customer) ?? { customer: item.customer, opportunities: 0, pipeline: 0, comodatos: 0 };
-    current.comodatos = item.comodatos;
-    map.set(item.customer, current);
-  }
-  return [...map.values()].sort((a, b) => b.pipeline - a.pipeline || a.customer.localeCompare(b.customer, "es"));
+  const sql = await rawDb(db);
+  return readThrough(sql, "clients:directory", ["leads", "equipment"], async () => {
+    const [leads, equipment] = await Promise.all([listLeads(sql), equipmentRows(sql)]);
+    const map = new Map<string, { customer: string; opportunities: number; pipeline: number; comodatos: number }>();
+    for (const lead of leads) {
+      if (!lead.customer) continue;
+      const current = map.get(lead.customer) ?? { customer: lead.customer, opportunities: 0, pipeline: 0, comodatos: 0 };
+      current.opportunities += 1;
+      current.pipeline += pipelineAmount(lead);
+      map.set(lead.customer, current);
+    }
+    for (const item of equipment) {
+      if (!item.client_name) continue;
+      const current = map.get(item.client_name) ?? { customer: item.client_name, opportunities: 0, pipeline: 0, comodatos: 0 };
+      current.comodatos += 1;
+      map.set(item.client_name, current);
+    }
+    return [...map.values()].sort((a, b) => b.pipeline - a.pipeline || a.customer.localeCompare(b.customer, "es"));
+  });
 }
 
 export async function clientTimeline(customer: string, db?: unknown) {
-  const sql = await sqlOf(db);
-  const leads = await sql.prepare("SELECT * FROM leads WHERE customer = ?").all(customer) as LeadRecord[];
-  const keys = leads.map((lead) => lead.import_key);
-  const activities = keys.length
-    ? (await sql.prepare(`SELECT * FROM activities WHERE lead_import_key IN (${keys.map(() => "?").join(",")})`).all(...keys) as {
-        activity_type: string;
-        deadline: string | null;
-        state: string;
-        note: string;
-        assignee: string;
-        created_at: string | null;
-        document_name: string;
-      }[])
-    : [];
-  const equipment = await sql.prepare("SELECT * FROM equipment WHERE client_name = ?").all(customer) as EquipmentRow[];
-  const events: { at: string; kind: string; title: string; detail: string }[] = [];
-  for (const lead of leads) {
-    events.push({
-      at: (lead.created_at ?? "").slice(0, 10) || "1970-01-01",
-      kind: "oportunidad",
-      title: lead.name,
-      detail: `${lead.stage} · ${lead.salesperson}`,
-    });
-  }
-  for (const activity of activities) {
-    events.push({
-      at: activity.deadline || (activity.created_at ?? "").slice(0, 10) || "1970-01-01",
-      kind: "actividad",
-      title: activity.activity_type || "Actividad",
-      detail: `${activity.state} · ${activity.assignee} · ${stripHtml(activity.note)}`.trim(),
-    });
-  }
-  for (const item of equipment) {
-    events.push({
-      at: item.delivered_on || item.created_at.slice(0, 10),
-      kind: "comodato",
-      title: `${item.store_code} · ${item.name}`,
-      detail: `${item.serial} · ${item.status}`,
-    });
-  }
-  const doc = (await currentCommittee(db)).doc;
-  for (const topic of doc.topics) {
-    for (const punto of topic.puntos) {
-      const linked = [punto.leadImportKey, ...punto.pendientes.map((item) => item.leadImportKey)].filter(Boolean);
-      const hit = linked.some((key) => keys.includes(key!));
-      if (!hit) continue;
-      for (const pendiente of punto.pendientes) {
-        if (pendiente.leadImportKey && keys.includes(pendiente.leadImportKey)) {
-          events.push({
-            at: pendiente.dueOn || doc.committee.heldOn,
-            kind: "comité",
-            title: pendiente.title || punto.title,
-            detail: `${topic.title} · ${pendiente.status}`,
-          });
+  const sql = await rawDb(db);
+  return readThrough(sql, `client:${customer}`, ["leads", "activities", "equipment", "committee"], async () => {
+    const [leadList, activityList, equipmentList] = await Promise.all([listLeads(sql), activityRows(sql), equipmentRows(sql)]);
+    const leads = leadList.filter((lead) => lead.customer === customer);
+    const keys = new Set(leads.map((lead) => lead.import_key));
+    const activities = activityList.filter((activity) => activity.lead_import_key != null && keys.has(activity.lead_import_key));
+    const equipment = equipmentList.filter((item) => item.client_name === customer);
+    const events: { at: string; kind: string; title: string; detail: string }[] = [];
+    for (const lead of leads) {
+      events.push({
+        at: (lead.created_at ?? "").slice(0, 10) || "1970-01-01",
+        kind: "oportunidad",
+        title: lead.name,
+        detail: `${lead.stage} · ${lead.salesperson}`,
+      });
+    }
+    for (const activity of activities) {
+      events.push({
+        at: activity.deadline || (activity.created_at ?? "").slice(0, 10) || "1970-01-01",
+        kind: "actividad",
+        title: activity.activity_type || "Actividad",
+        detail: `${activity.state} · ${activity.assignee} · ${stripHtml(activity.note)}`.trim(),
+      });
+    }
+    for (const item of equipment) {
+      events.push({
+        at: item.delivered_on || item.created_at.slice(0, 10),
+        kind: "comodato",
+        title: `${item.store_code} · ${item.name}`,
+        detail: `${item.serial} · ${item.status}`,
+      });
+    }
+    const doc = (await currentCommittee(sql)).doc;
+    for (const topic of doc.topics) {
+      for (const punto of topic.puntos) {
+        const linked = [punto.leadImportKey, ...punto.pendientes.map((item) => item.leadImportKey)].filter(Boolean);
+        const hit = linked.some((key) => keys.has(key!));
+        if (!hit) continue;
+        for (const pendiente of punto.pendientes) {
+          if (pendiente.leadImportKey && keys.has(pendiente.leadImportKey)) {
+            events.push({
+              at: pendiente.dueOn || doc.committee.heldOn,
+              kind: "comité",
+              title: pendiente.title || punto.title,
+              detail: `${topic.title} · ${pendiente.status}`,
+            });
+          }
         }
       }
     }
-  }
-  events.sort((a, b) => b.at.localeCompare(a.at));
-  return { customer, leads, equipment, events };
+    events.sort((a, b) => b.at.localeCompare(a.at));
+    return { customer, leads, equipment, activities, events };
+  });
 }
 
 export function costFor(row: EquipmentRow, rate: number): ReturnType<typeof maintenanceCost> {

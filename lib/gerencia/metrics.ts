@@ -1,7 +1,9 @@
+import { listLeads } from "@/lib/db";
 import { classifyLead, kpiRevenue, type LeadFact } from "@/lib/kpi/compute";
 import { expiringContracts } from "@/lib/legal/contracts";
 import type { Actor } from "@/lib/legal/access";
 import { pendingForUser, type PendingSignature } from "@/lib/legal/signatures";
+import { readThrough } from "@/lib/sql/read-cache";
 import type { SqlDb } from "@/lib/sql/types";
 
 export type StatusCount = { status: string; count: number };
@@ -29,15 +31,6 @@ export type GerenciaSnapshot = {
   projection: PipelineProjection;
 };
 
-type LeadRow = {
-  stage: string;
-  active: number;
-  won_status: string | null;
-  expected_revenue: number | null;
-  probability: number | null;
-  expected_close: string | null;
-};
-
 function dayOffset(today: Date, days: number): string {
   const date = new Date(today.getTime());
   date.setUTCDate(date.getUTCDate() + days);
@@ -45,7 +38,14 @@ function dayOffset(today: Date, days: number): string {
 }
 
 export async function gerenciaSnapshot(db: SqlDb, actor: Actor, today = new Date()): Promise<GerenciaSnapshot> {
-  const leads = await db.all<LeadRow>("SELECT stage, active, won_status, expected_revenue, probability, expected_close FROM leads");
+  const todayKey = today.toISOString().slice(0, 10);
+  return readThrough(db, `gerencia:${todayKey}:${actor.uid}:${actor.email.toLowerCase()}`, ["leads", "visits", "legal"], () =>
+    gerenciaFresh(db, actor, today),
+  );
+}
+
+async function gerenciaFresh(db: SqlDb, actor: Actor, today: Date): Promise<GerenciaSnapshot> {
+  const leads = await listLeads(db);
   let openDeals = 0;
   let pipelineValue = 0;
   let won = 0;
@@ -59,14 +59,14 @@ export async function gerenciaSnapshot(db: SqlDb, actor: Actor, today = new Date
   const stages = new Map<string, StageValue>();
   for (const lead of leads) {
     const fact: LeadFact = {
-      importKey: "",
-      name: "",
+      importKey: lead.import_key,
+      name: lead.name,
       stage: lead.stage,
-      salesperson: "",
-      customer: "",
+      salesperson: lead.salesperson,
+      customer: lead.customer,
       expectedRevenue: lead.expected_revenue,
       probability: lead.probability,
-      createdAt: null,
+      createdAt: lead.created_at,
       active: lead.active === 1,
       wonStatus: lead.won_status ?? undefined,
     };

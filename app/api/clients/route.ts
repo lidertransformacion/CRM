@@ -2,7 +2,6 @@ import { NextResponse } from "next/server";
 import { clientDirectory, clientTimeline } from "@/lib/db";
 import { isActivityOverdue } from "@/lib/kpi/compute";
 import { OPEN_STAGES, stageOf } from "@/lib/odoo/stages";
-import { activitiesForLeads } from "@/lib/pipeline/queries";
 import { cop, displaySeller, stripHtml, todayIso } from "@/lib/utils";
 import type { ClientTimelineResponse, TimelineEvent } from "@/components/clients/types";
 
@@ -28,7 +27,7 @@ export async function GET(request: Request) {
 
   const base = await clientTimeline(customer);
   const today = todayIso();
-  const activities = await activitiesForLeads(base.leads.map((lead) => lead.import_key));
+  const activities = base.activities;
   const events: TimelineEvent[] = [];
 
   for (const lead of base.leads) {

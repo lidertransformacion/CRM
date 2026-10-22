@@ -4,6 +4,7 @@ import { deliverMail } from "@/lib/mail/deliver";
 import { assertFilesOwned, parseAttachmentIds, resolveMailParts } from "@/lib/mail/files";
 import { sanitizeEmailHtml, htmlToText } from "@/lib/mail/html";
 import { mailMode } from "@/lib/mail/message";
+import { OUTBOX_COLUMNS } from "@/lib/sql/columns";
 import type { SqlDb } from "@/lib/sql/types";
 
 export type OutboxRow = {
@@ -77,7 +78,7 @@ export async function enqueueEmail(
   let dedupeKey = input.dedupeKey?.trim() || null;
   if (dedupeKey && input.resend) dedupeKey = `${dedupeKey}:${now}`;
   if (dedupeKey && !input.resend) {
-    const existing = await db.get<OutboxRow>("SELECT * FROM email_outbox WHERE dedupe_key = ?", [dedupeKey]);
+    const existing = await db.get<OutboxRow>(`SELECT ${OUTBOX_COLUMNS} FROM email_outbox WHERE dedupe_key = ?`, [dedupeKey]);
     if (existing && existing.status !== "failed") {
       return { id: existing.id, deduped: true, status: existing.status };
     }
@@ -130,11 +131,11 @@ export async function processOutbox(
   const deliver = options.deliver ?? deliverMail;
   const rows = options.ids?.length
     ? await db.all<OutboxRow>(
-        `SELECT * FROM email_outbox WHERE status = 'queued' AND id IN (${options.ids.map(() => "?").join(", ")}) ORDER BY id`,
+        `SELECT ${OUTBOX_COLUMNS} FROM email_outbox WHERE status = 'queued' AND id IN (${options.ids.map(() => "?").join(", ")}) ORDER BY id`,
         options.ids,
       )
     : await db.all<OutboxRow>(
-        `SELECT * FROM email_outbox
+        `SELECT ${OUTBOX_COLUMNS} FROM email_outbox
          WHERE status = 'queued' AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
          ORDER BY id LIMIT ?`,
         [nowIso, options.limit ?? 25],

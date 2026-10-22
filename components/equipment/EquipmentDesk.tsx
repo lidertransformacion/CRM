@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
 import { Ellipsis, FileSpreadsheet, FunnelX, Plus, Settings, SlidersHorizontal, X } from "lucide-react";
 import type { EquipmentRow } from "@/lib/db";
 import { COMODATO_STATUSES, SITES } from "@/lib/equipment/catalog";
@@ -63,7 +63,6 @@ export function EquipmentDesk({
   hourlyRate: number;
   today: string;
 }) {
-  const router = useRouter();
   const pathname = usePathname();
   const params = useSearchParams();
   const { toast } = useToast();
@@ -78,7 +77,17 @@ export function EquipmentDesk({
   const [status, setStatus] = React.useState("");
   const [category, setCategory] = React.useState("");
   const [clientFilter, setClientFilter] = React.useState<ClientFilter>("all");
-  const view = (params.get("vista") ?? "") as View;
+  const [view, setView] = React.useState<View>((params.get("vista") ?? "") as View);
+
+  function showView(next: View) {
+    const value = view === next ? "" : next;
+    setView(value);
+    const url = new URLSearchParams(params.toString());
+    url.delete("vista");
+    if (value) url.set("vista", value);
+    const text = url.toString();
+    window.history.replaceState(null, "", text ? `${pathname}?${text}` : pathname);
+  }
 
   const [sort, setSort] = React.useState<SortState>({ key: "code", dir: "asc" });
   const [page, setPage] = React.useState(1);
@@ -138,7 +147,7 @@ export function EquipmentDesk({
 
   /** Filtros activos aparte del buscador: los que se muestran como chips en móvil. */
   const activeChips: { key: string; label: string; clear: () => void }[] = [
-    view ? { key: "view", label: VIEW_LABELS[view], clear: () => router.replace(pathname) } : null,
+    view ? { key: "view", label: VIEW_LABELS[view], clear: () => showView(view) } : null,
     site ? { key: "site", label: `Sede: ${SITES.find((item) => item.id === site)?.name ?? site}`, clear: () => setSite("") } : null,
     status ? { key: "status", label: `Estado: ${COMODATO_STATUSES.find((item) => item.id === status)?.label ?? status}`, clear: () => setStatus("") } : null,
     category ? { key: "category", label: `Categoría: ${category}`, clear: () => setCategory("") } : null,
@@ -167,17 +176,13 @@ export function EquipmentDesk({
     setFiltersOpen(false);
   }
 
-  function viewHref(target: View): string {
-    return view === target || !target ? pathname : `${pathname}?vista=${target}`;
-  }
-
   function clearFilters() {
     setQuery("");
     setSite("");
     setStatus("");
     setCategory("");
     setClientFilter("all");
-    if (view) router.replace(pathname);
+    if (view) showView(view);
   }
 
   function toggleSort(key: SortKey) {
@@ -186,7 +191,12 @@ export function EquipmentDesk({
 
   function closeEditor() {
     setEditor(null);
-    if (params.get("nuevo") || params.get("editar")) router.replace(viewHref(view));
+    if (params.get("nuevo") || params.get("editar")) {
+      const url = new URLSearchParams();
+      if (view) url.set("vista", view);
+      const text = url.toString();
+      window.history.replaceState(null, "", text ? `${pathname}?${text}` : pathname);
+    }
   }
 
   function handleSaved(row: EquipmentRow, nextDate: string | null, created: boolean) {
@@ -318,16 +328,17 @@ export function EquipmentDesk({
       </PageHeader>
 
       <StatGrid className="mb-5">
-        <Stat label="Total" value={counts.total} hint="Equipos registrados" href={viewHref("")} className={cn(!view && "border-navy")} />
-        <Stat label="En comodato" value={counts.comodato} tone="info" hint="Entregados a clientes" href={viewHref("comodato")} className={cn(view === "comodato" && "border-navy ring-2 ring-navy/15")} />
-        <Stat label="En tienda" value={counts.tienda} hint="Operando en sedes" href={viewHref("tienda")} className={cn("max-sm:order-last max-sm:col-span-2", view === "tienda" && "border-navy ring-2 ring-navy/15")} />
-        <Stat label="Garantía vencida" value={counts.warranty} tone="danger" hint="Según fecha o la hoja" href={viewHref("garantia")} className={cn(view === "garantia" && "border-navy ring-2 ring-navy/15")} />
+        <Stat label="Total" value={counts.total} hint="Equipos registrados" onClick={() => showView("")} active={!view} className={cn(!view && "border-navy")} />
+        <Stat label="En comodato" value={counts.comodato} tone="info" hint="Entregados a clientes" onClick={() => showView("comodato")} active={view === "comodato"} className={cn(view === "comodato" && "border-navy ring-2 ring-navy/15")} />
+        <Stat label="En tienda" value={counts.tienda} hint="Operando en sedes" onClick={() => showView("tienda")} active={view === "tienda"} className={cn("max-sm:order-last max-sm:col-span-2", view === "tienda" && "border-navy ring-2 ring-navy/15")} />
+        <Stat label="Garantía vencida" value={counts.warranty} tone="danger" hint="Según fecha o la hoja" onClick={() => showView("garantia")} active={view === "garantia"} className={cn(view === "garantia" && "border-navy ring-2 ring-navy/15")} />
         <Stat
           label="Mantenimiento vencido"
           value={counts.maintenance}
           tone="warn"
           hint="Vencido o sin fecha base"
-          href={viewHref("mantenimiento")}
+          onClick={() => showView("mantenimiento")}
+          active={view === "mantenimiento"}
           className={cn(view === "mantenimiento" && "border-navy ring-2 ring-navy/15")}
         />
       </StatGrid>

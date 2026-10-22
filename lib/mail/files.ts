@@ -2,6 +2,7 @@ import { HttpError } from "@/lib/auth/users";
 import { MAX_D1_FILE_BYTES, MAX_MAIL_BYTES, fileIdsInHtml, rewriteFileSrc } from "@/lib/mail/html";
 import type { MailPart } from "@/lib/mail/message";
 import { releaseBytes, reserveBytes } from "@/lib/storage/quota";
+import { MAIL_FILE_COLUMNS } from "@/lib/sql/columns";
 import type { SqlDb } from "@/lib/sql/types";
 
 export type MailFileRow = {
@@ -158,7 +159,7 @@ export async function saveMailFile(
 }
 
 export async function readMailFile(db: SqlDb, id: string): Promise<{ row: MailFileRow; bytes: Uint8Array } | null> {
-  const row = await db.get<MailFileRow>("SELECT * FROM mail_files WHERE id = ?", [id]);
+  const row = await db.get<MailFileRow>(`SELECT ${MAIL_FILE_COLUMNS} FROM mail_files WHERE id = ?`, [id]);
   if (!row) return null;
   if (row.r2_key) {
     const bucket = await mailFilesBucket();
@@ -172,7 +173,7 @@ export async function readMailFile(db: SqlDb, id: string): Promise<{ row: MailFi
 }
 
 export async function deleteMailFile(db: SqlDb, userId: number, id: string): Promise<void> {
-  const row = await db.get<MailFileRow>("SELECT * FROM mail_files WHERE id = ? AND user_id = ?", [id, userId]);
+  const row = await db.get<MailFileRow>(`SELECT ${MAIL_FILE_COLUMNS} FROM mail_files WHERE id = ? AND user_id = ?`, [id, userId]);
   if (!row) throw new HttpError(404, "Ese archivo no está.");
   if (row.r2_key) {
     const bucket = await mailFilesBucket();
@@ -186,7 +187,7 @@ export async function deleteMailFile(db: SqlDb, userId: number, id: string): Pro
 async function rowsFor(db: SqlDb, userId: number, ids: string[]): Promise<MailFileRow[]> {
   if (!ids.length) return [];
   const marks = ids.map(() => "?").join(", ");
-  const rows = await db.all<MailFileRow>(`SELECT * FROM mail_files WHERE user_id = ? AND id IN (${marks})`, [userId, ...ids]);
+  const rows = await db.all<MailFileRow>(`SELECT ${MAIL_FILE_COLUMNS} FROM mail_files WHERE user_id = ? AND id IN (${marks})`, [userId, ...ids]);
   if (rows.length !== ids.length) throw new HttpError(400, "Un archivo del correo ya no está disponible.");
   return rows;
 }

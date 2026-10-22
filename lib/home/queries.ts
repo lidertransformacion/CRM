@@ -1,7 +1,8 @@
-import { getDb, type EquipmentRow, type LeadRecord } from "@/lib/db";
+import { activityRows, currentCommittee, getDb, lastMaintenanceMap, listEquipment, listLeads, type EquipmentRow, type LeadRecord } from "@/lib/db";
 import { recordTiming } from "@/lib/observe";
+import { readThrough } from "@/lib/sql/read-cache";
 import type { SqlDb } from "@/lib/sql/types";
-import { computeKpis, type ActivityFact, type LeadFact } from "@/lib/kpi/compute";
+import { computeKpis, type LeadFact } from "@/lib/kpi/compute";
 import { boardStats, carryCount, closedSinceLast, flatten, isCarried, isOpen, isOverdue, personStats } from "@/lib/committee/metrics";
 import type { CommitteeDoc } from "@/lib/committee/types";
 import { siteById } from "@/lib/equipment/catalog";
@@ -223,51 +224,49 @@ export function committeeSummary(doc: CommitteeDoc, asOf: string): CommitteeSumm
   };
 }
 
-/** Todo lo que Inicio necesita, en objetos planos listos para renderizar. Una sola ida a D1. */
+/** Todo lo que Inicio necesita, en objetos planos listos para renderizar. Se recalcula solo tras una escritura. */
 export async function homeData(asOf = todayIso(), db?: SqlDb): Promise<HomeData> {
   const sql = db ?? (await getDb());
-  const started = performance.now();
-  const [committeeRows, leadRows, equipmentRows, maintenanceRows, activityRows] = await sql.batch([
-    { sql: "SELECT payload FROM committee_docs WHERE is_current = 1" },
-    {
-      sql: `SELECT import_key, name, stage, salesperson, customer, expected_revenue, probability, created_at, active, won_status, next_activity_deadline FROM leads`,
-    },
-    {
-      sql: `SELECT serial, name, site_id, store_code, warranty_until, warranty_state, maintenance_every_days, client_name, status, delivered_on FROM equipment`,
-    },
-    { sql: "SELECT serial, MAX(performed_on) AS last_on FROM maintenance_logs GROUP BY serial" },
-    { sql: "SELECT assignee, deadline, state FROM activities" },
-  ]);
-  recordTiming("db", performance.now() - started);
-  const payload = (committeeRows[0] as { payload: string } | undefined)?.payload;
-  if (!payload) throw new Error("No hay comité vigente.");
-  const doc = JSON.parse(payload) as CommitteeDoc;
-  const leads = leadRows as LeadRecord[];
-  const facts: LeadFact[] = leads.map((lead) => ({
-    importKey: lead.import_key,
-    name: lead.name,
-    stage: lead.stage,
-    salesperson: lead.salesperson,
-    customer: lead.customer,
-    expectedRevenue: lead.expected_revenue,
-    probability: lead.probability,
-    createdAt: lead.created_at,
-    active: !!lead.active,
-    wonStatus: lead.won_status,
-  }));
-  const kpis = computeKpis(facts, activityRows as ActivityFact[], asOf);
-  const lastMaintenance = new Map((maintenanceRows as { serial: string; last_on: string }[]).map((row) => [row.serial, row.last_on]));
-  const pendientes = pendienteAlerts(doc, asOf);
-  const alerts = leadAlerts(leads, asOf);
-  const equipment = equipmentAlerts(equipmentRows as EquipmentRow[], lastMaintenance, asOf);
-  return {
-    asOf,
-    committee: committeeSummary(doc, asOf),
-    pendientes: { rows: pendientes.slice(0, PENDIENTES_LIMIT), total: pendientes.length },
-    leads: { rows: alerts.slice(0, LEADS_LIMIT), total: alerts.length },
-    equipment,
-    revenue: { expected: kpis.team.expectedRevenue, weighted: kpis.team.weightedRevenue, openCount: kpis.team.open },
-  };
+  return readThrough(sql, `home:${asOf}`, ["committee", "leads", "activities", "equipment", "maintenance"], async () => {
+    const started = performance.now();
+    const [committee, leads, equipmentRows, lastMaintenance, activities] = await Promise.all([
+      currentCommittee(sql),
+      listLeads(sql),
+      listEquipment(sql),
+      lastMaintenanceMap(sql),
+      activityRows(sql),
+    ]);
+    recordTiming("db", performance.now() - started);
+    const doc = committee.doc;
+    const facts: LeadFact[] = leads.map((lead) => ({
+      importKey: lead.import_key,
+      name: lead.name,
+      stage: lead.stage,
+      salesperson: lead.salesperson,
+      customer: lead.customer,
+      expectedRevenue: lead.expected_revenue,
+      probability: lead.probability,
+      createdAt: lead.created_at,
+      active: !!lead.active,
+      wonStatus: lead.won_status,
+    }));
+    const kpis = computeKpis(
+      facts,
+      activities.map((activity) => ({ assignee: activity.assignee, deadline: activity.deadline, state: activity.state })),
+      asOf,
+    );
+    const pendientes = pendienteAlerts(doc, asOf);
+    const alerts = leadAlerts(leads, asOf);
+    const equipment = equipmentAlerts(equipmentRows, new Map(Object.entries(lastMaintenance)), asOf);
+    return {
+      asOf,
+      committee: committeeSummary(doc, asOf),
+      pendientes: { rows: pendientes.slice(0, PENDIENTES_LIMIT), total: pendientes.length },
+      leads: { rows: alerts.slice(0, LEADS_LIMIT), total: alerts.length },
+      equipment,
+      revenue: { expected: kpis.team.expectedRevenue, weighted: kpis.team.weightedRevenue, openCount: kpis.team.open },
+    };
+  });
 }
 
 /** Frase de la cabecera: lo que requiere atención hoy, en una línea. */

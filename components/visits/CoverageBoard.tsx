@@ -1,3 +1,4 @@
+import { Fragment } from "react";
 import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
@@ -16,28 +17,57 @@ function href(start: string, segment: string, list: string, query: string) {
   return text ? `/visitas?${text}` : "/visitas";
 }
 
+function control(className: string, label: string, onClick: (() => void) | undefined, hrefTo: string) {
+  if (onClick) {
+    return (
+      <button type="button" onClick={onClick} className={className}>
+        {label}
+      </button>
+    );
+  }
+  return (
+    <Link href={hrefTo} className={className}>
+      {label}
+    </Link>
+  );
+}
+
 /** Weekly coverage: visits done against the points that were due, by commercial. */
-export function CoverageBoard({ data, segment, list, query }: { data: CoverageData; segment: string; list: string; query: string }) {
+export function CoverageBoard({
+  data,
+  segment,
+  list,
+  query,
+  onNavigate,
+}: {
+  data: CoverageData;
+  segment: string;
+  list: string;
+  query: string;
+  /** When set, week, segment, and list stay on this page and do not ask the server again. */
+  onNavigate?: (next: { week?: string; segment?: string; list?: string }) => void;
+}) {
   const attention = data.rows.filter((row) => row.dueThisWeek || row.visitState === "venc" || row.visitState === "sin");
   const shown = list === "todos" ? data.rows : attention;
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-2">
-          <Link href={href(addDays(data.start, -7), segment, list, query)} className="rounded-md border border-line bg-surface px-3 py-2 text-sm">
-            Semana anterior
-          </Link>
-          <Link href={href(addDays(data.start, 7), segment, list, query)} className="rounded-md border border-line bg-surface px-3 py-2 text-sm">
-            Semana siguiente
-          </Link>
+          {control("rounded-md border border-line bg-surface px-3 py-2 text-sm", "Semana anterior", onNavigate && (() => onNavigate({ week: addDays(data.start, -7) })), href(addDays(data.start, -7), segment, list, query))}
+          {control("rounded-md border border-line bg-surface px-3 py-2 text-sm", "Semana siguiente", onNavigate && (() => onNavigate({ week: addDays(data.start, 7) })), href(addDays(data.start, 7), segment, list, query))}
         </div>
         <p className="text-sm text-ink-2">{weekLabel(data.start)}</p>
       </div>
       <div className="flex gap-2 overflow-x-auto">
         {SEGMENTS.map((item) => (
-          <Link key={item} href={href(data.start, item, list, query)} className={`shrink-0 rounded-full border px-3 py-2 text-xs font-medium ${segment === item ? "border-navy bg-navy text-crema" : "border-line bg-surface text-ink-2"}`}>
-            {item === "todos" ? "Todo el equipo" : OWNER_LABEL[item]}
-          </Link>
+          <Fragment key={item}>
+            {control(
+              `shrink-0 rounded-full border px-3 py-2 text-xs font-medium ${segment === item ? "border-navy bg-navy text-crema" : "border-line bg-surface text-ink-2"}`,
+              item === "todos" ? "Todo el equipo" : OWNER_LABEL[item],
+              onNavigate && (() => onNavigate({ segment: item })),
+              href(data.start, item, list, query),
+            )}
+          </Fragment>
         ))}
       </div>
       <StatGrid cols={4}>
@@ -65,11 +95,12 @@ export function CoverageBoard({ data, segment, list, query }: { data: CoverageDa
         <CardHeader
           title={list === "todos" ? "Todos los puntos" : "Por cubrir"}
           description={list === "todos" ? "Frecuencia de cada punto del segmento" : "Vencen esta semana, están vencidos o todavía no tienen visita"}
-          actions={
-            <Link href={href(data.start, segment, list === "todos" ? "" : "todos", query)} className="text-sm font-medium text-navy underline">
-              {list === "todos" ? "Solo lo pendiente" : "Ver todos"}
-            </Link>
-          }
+          actions={control(
+            "text-sm font-medium text-navy underline",
+            list === "todos" ? "Solo lo pendiente" : "Ver todos",
+            onNavigate && (() => onNavigate({ list: list === "todos" ? "" : "todos" })),
+            href(data.start, segment, list === "todos" ? "" : "todos", query),
+          )}
         />
         {shown.length === 0 ? (
           <CardBody>
